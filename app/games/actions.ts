@@ -18,6 +18,15 @@ function generateInviteCode(): string {
   return code;
 }
 
+function shuffle<T>(items: T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
 /**
  * Ensures there is an authenticated user with a completed profile (username).
  * Redirects to login / profile setup otherwise. Never call inside try/catch —
@@ -223,7 +232,7 @@ export async function startGame(formData: FormData): Promise<void> {
 
   const { data: game } = await supabase
     .from("games")
-    .select("id, host_id, status, min_players")
+    .select("id, host_id, status, min_players, preset_id")
     .eq("id", gameId)
     .maybeSingle();
 
@@ -236,7 +245,7 @@ export async function startGame(formData: FormData): Promise<void> {
 
   const { data: players } = await supabase
     .from("game_players")
-    .select("id")
+    .select("id, user_id, joined_at")
     .eq("game_id", gameId)
     .order("joined_at", { ascending: true });
 
@@ -244,15 +253,104 @@ export async function startGame(formData: FormData): Promise<void> {
     redirect(`/games/${gameId}?error=min_players`);
   }
 
-  // Assign seat numbers by join order.
+  const { data: roles } = await supabase
+    .from("roles")
+    .select("id, key, alignment");
+
+  const villager = roles?.find((r) => r.key === "villager");
+  if (!roles || !villager) {
+    redirect(`/games/${gameId}?error=roles_unavailable`);
+  }
+
+  const roleByKey = new Map(roles.map((r) => [r.key, r]));
+  const alignmentByRoleId = new Map(roles.map((r) => [r.id, r.alignment]));
+
+  // Build a list of role ids — one per player — from the preset composition,
+  // padding any extra players with villagers (and trimming if necessary).
+  const roleIds: string[] = [];
+  if (game.preset_id) {
+    const { data: items } = await supabase
+      .from("role_preset_items")
+      .select("role_id, count")
+      .eq("preset_id", game.preset_id);
+    for (const item of items ?? []) {
+      for (let i = 0; i < item.count; i++) roleIds.push(item.role_id);
+    }
+  }
+
+  if (roleIds.length === 0) {
+    // Fallback composition derived from the player count.
+    const mafiaCount = Math.max(1, Math.floor(players.length / 4));
+    const mafia = roleByKey.get("mafia");
+    const detective = roleByKey.get("detective");
+    const healer = roleByKey.get("healer");
+    const mayor = roleByKey.get("mayor");
+    for (let i = 0; i < mafiaCount && mafia; i++) roleIds.push(mafia.id);
+    if (detective) roleIds.push(detective.id);
+    if (healer) roleIds.push(healer.id);
+    if (mayor && players.length >= 7) roleIds.push(mayor.id);
+  }
+
+  while (roleIds.length < players.length) roleIds.push(villager.id);
+  roleIds.length = players.length;
+
+  const shuffledRoles = shuffle(roleIds);
+  const shuffledPlayers = shuffle(players);
+
+  const assignments = shuffledPlayers.map((player, index) => ({
+    game_id: gameId,
+    player_id: player.id,
+    user_id: player.user_id,
+    role_id: shuffledRoles[index],
+    alignment: alignmentByRoleId.get(shuffledRoles[index]) ?? "town",
+  }));
+
+  // Reset any partial assignment from a prior failed attempt, then assign.
+  await supabase.from("game_player_roles").delete().eq("game_id", gameId);
+  const { error: roleError } = await supabase
+    .from("game_player_roles")
+    .insert(assignments);
+  if (roleError) {
+    redirect(`/games/${gameId}?error=${encodeURIComponent(roleError.message)}`);
+  }
+
+  // Seat players in the shuffled (randomized) order.
   await Promise.all(
-    players.map((player, index) =>
+    shuffledPlayers.map((player, index) =>
       supabase
         .from("game_players")
-        .update({ seat: index + 1 })
+        .update({ seat: index + 1, status: "alive" })
         .eq("id", player.id),
     ),
   );
+
+  // Create the town and mafia chat rooms once.
+  const { count: roomCount } = await supabase
+    .from("chat_rooms")
+    .select("id", { count: "exact", head: true })
+    .eq("game_id", gameId);
+  if (!roomCount) {
+    await supabase.from("chat_rooms").insert([
+      { game_id: gameId, type: "town", name: "Town Square" },
+      { game_id: gameId, type: "mafia", name: "Mafia" },
+    ]);
+  }
+
+  // Open the first night phase once.
+  const { count: phaseCount } = await supabase
+    .from("game_phases")
+    .select("id", { count: "exact", head: true })
+    .eq("game_id", gameId);
+  if (!phaseCount) {
+    await supabase.from("game_phases").insert({
+      game_id: gameId,
+      phase_number: 1,
+      phase_type: "night",
+      day_number: 1,
+      status: "active",
+      started_at: new Date().toISOString(),
+    });
+  }
 
   await supabase
     .from("games")

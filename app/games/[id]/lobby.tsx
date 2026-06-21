@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import {
   leaveGame,
@@ -59,6 +60,7 @@ export function Lobby({
   currentUserId: string;
   startError: boolean;
 }) {
+  const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
   const [game, setGame] = useState<LobbyGame>(initialGame);
   const [players, setPlayers] = useState<LobbyPlayer[]>(initialPlayers);
@@ -82,9 +84,16 @@ export function Lobby({
         .eq("game_id", initialGame.id)
         .order("joined_at", { ascending: true }),
     ]);
-    if (g) setGame(g as LobbyGame);
+    if (g) {
+      setGame(g as LobbyGame);
+      // Once the host starts the game, reload so the server renders the
+      // role-reveal view instead of the lobby.
+      if (g.status !== "lobby") {
+        router.refresh();
+      }
+    }
     if (p) setPlayers(p as LobbyPlayer[]);
-  }, [supabase, initialGame.id]);
+  }, [supabase, initialGame.id, router]);
 
   useEffect(() => {
     const channel = supabase
