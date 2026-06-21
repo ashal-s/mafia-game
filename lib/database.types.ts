@@ -200,6 +200,7 @@ export type Database = {
           game_id: string
           id: string
           is_host: boolean
+          is_ready: boolean
           joined_at: string
           role_id: string | null
           seat: number | null
@@ -211,6 +212,7 @@ export type Database = {
           game_id: string
           id?: string
           is_host?: boolean
+          is_ready?: boolean
           joined_at?: string
           role_id?: string | null
           seat?: number | null
@@ -222,6 +224,7 @@ export type Database = {
           game_id?: string
           id?: string
           is_host?: boolean
+          is_ready?: boolean
           joined_at?: string
           role_id?: string | null
           seat?: number | null
@@ -260,6 +263,7 @@ export type Database = {
           host_id: string
           id: string
           max_players: number
+          min_players: number
           name: string | null
           preset_id: string | null
           settings: Json
@@ -275,6 +279,7 @@ export type Database = {
           host_id: string
           id?: string
           max_players?: number
+          min_players?: number
           name?: string | null
           preset_id?: string | null
           settings?: Json
@@ -292,6 +297,7 @@ export type Database = {
           host_id?: string
           id?: string
           max_players?: number
+          min_players?: number
           name?: string | null
           preset_id?: string | null
           settings?: Json

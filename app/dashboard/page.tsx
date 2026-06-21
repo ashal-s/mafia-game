@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUserWithProfile } from "@/lib/profile";
 import { signOut } from "@/app/(auth)/actions";
@@ -49,13 +50,12 @@ export default async function DashboardPage() {
             <p className="mt-1 text-sm text-zinc-400">
               Host a new table and invite your friends.
             </p>
-            <button
-              type="button"
-              disabled
-              className="mt-4 rounded-lg bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-500"
+            <Link
+              href="/games/new"
+              className="mt-4 inline-flex rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-500"
             >
-              Coming soon
-            </button>
+              Create game
+            </Link>
           </div>
 
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6">
@@ -65,13 +65,12 @@ export default async function DashboardPage() {
             <p className="mt-1 text-sm text-zinc-400">
               Enter a room code to join an existing table.
             </p>
-            <button
-              type="button"
-              disabled
-              className="mt-4 rounded-lg bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-500"
+            <Link
+              href="/games/join"
+              className="mt-4 inline-flex rounded-lg border border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600"
             >
-              Coming soon
-            </button>
+              Join game
+            </Link>
           </div>
         </div>
       </main>
