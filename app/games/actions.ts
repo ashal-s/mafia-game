@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import type { Json } from "@/lib/database.types";
 
 export type FormState = { error?: string };
 
@@ -16,6 +17,33 @@ function generateInviteCode(): string {
     code += CODE_ALPHABET[bytes[i] % CODE_ALPHABET.length];
   }
   return code;
+}
+
+function shuffle<T>(items: T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+const DEFAULT_SNIPER_BULLETS = 2;
+const DEFAULT_HEALER_SELF_HEALS = 1;
+
+/**
+ * Parses a configurable role limit. The sentinel string "unlimited" maps to
+ * `null` (no limit); otherwise we expect a small non-negative integer and fall
+ * back to the provided default when the value is missing or invalid.
+ */
+function parseRoleLimit(
+  raw: FormDataEntryValue | null,
+  fallback: number,
+): number | null {
+  if (raw === "unlimited") return null;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n >= 0 && n <= 99) return n;
+  return fallback;
 }
 
 /**
@@ -58,28 +86,103 @@ export async function createGame(
       ? rawName.trim().slice(0, 80)
       : null;
 
-  const presetId =
-    typeof formData.get("preset_id") === "string" &&
-    (formData.get("preset_id") as string).length > 0
-      ? (formData.get("preset_id") as string)
-      : null;
+  const choice = formData.get("setup");
+  if (typeof choice !== "string" || choice.length === 0) {
+    return { error: "Choose a game setup." };
+  }
 
+  let presetId: string | null = null;
   let minPlayers = 5;
   let maxPlayers = 15;
+  const settingsObj: {
+    composition?: Record<string, number>;
+    roleConfig?: {
+      sniper?: { bullets: number | null };
+      healer?: { selfHeals: number | null };
+    };
+  } = {};
 
-  if (presetId) {
+  if (choice === "custom") {
+    const playerCount = Number(formData.get("players"));
+    if (!Number.isInteger(playerCount) || playerCount < 3 || playerCount > 30) {
+      return { error: "Choose between 3 and 30 players for a custom game." };
+    }
+
+    // Gather a count for each non-villager role; villagers fill the rest.
+    const { data: specialRoles } = await supabase
+      .from("roles")
+      .select("key, alignment")
+      .neq("key", "villager");
+
+    const composition: Record<string, number> = {};
+    let specialsTotal = 0;
+    let mafiaTotal = 0;
+
+    for (const role of specialRoles ?? []) {
+      const raw = formData.get(`count_${role.key}`);
+      const count = raw == null ? 0 : Number(raw);
+      if (!Number.isInteger(count) || count < 0 || count > playerCount) {
+        return { error: `Invalid count for the ${role.key} role.` };
+      }
+      if (count > 0) composition[role.key] = count;
+      specialsTotal += count;
+      if (role.alignment === "mafia") mafiaTotal += count;
+    }
+
+    if (mafiaTotal < 1) {
+      return { error: "Add at least one Mafia role." };
+    }
+    if (specialsTotal > playerCount) {
+      return {
+        error:
+          "You've assigned more special roles than players. Reduce some counts.",
+      };
+    }
+
+    // Custom games run with an exact roster: special roles + villagers = players.
+    minPlayers = playerCount;
+    maxPlayers = playerCount;
+    settingsObj.composition = composition;
+  } else {
     const { data: preset } = await supabase
       .from("role_presets")
-      .select("min_players, max_players")
-      .eq("id", presetId)
+      .select("id, min_players, max_players")
+      .eq("id", choice)
       .maybeSingle();
 
     if (!preset) {
       return { error: "That role preset no longer exists." };
     }
+    presetId = preset.id;
     minPlayers = preset.min_players;
     maxPlayers = preset.max_players;
   }
+
+  // Optional per-role limits. The form only submits these fields when the
+  // relevant role is part of the chosen setup, so their presence implies the
+  // role is in play. `null` means unlimited.
+  const roleConfig: NonNullable<typeof settingsObj.roleConfig> = {};
+  if (formData.has("sniper_bullets")) {
+    roleConfig.sniper = {
+      bullets: parseRoleLimit(
+        formData.get("sniper_bullets"),
+        DEFAULT_SNIPER_BULLETS,
+      ),
+    };
+  }
+  if (formData.has("healer_self_heals")) {
+    roleConfig.healer = {
+      selfHeals: parseRoleLimit(
+        formData.get("healer_self_heals"),
+        DEFAULT_HEALER_SELF_HEALS,
+      ),
+    };
+  }
+  if (Object.keys(roleConfig).length > 0) {
+    settingsObj.roleConfig = roleConfig;
+  }
+
+  const settings = settingsObj as Json;
 
   let gameId: string | null = null;
   for (let attempt = 0; attempt < 5 && !gameId; attempt++) {
@@ -92,6 +195,7 @@ export async function createGame(
         preset_id: presetId,
         min_players: minPlayers,
         max_players: maxPlayers,
+        settings,
       })
       .select("id")
       .single();
@@ -223,7 +327,7 @@ export async function startGame(formData: FormData): Promise<void> {
 
   const { data: game } = await supabase
     .from("games")
-    .select("id, host_id, status, min_players")
+    .select("id, host_id, status, min_players, preset_id, settings")
     .eq("id", gameId)
     .maybeSingle();
 
@@ -236,7 +340,7 @@ export async function startGame(formData: FormData): Promise<void> {
 
   const { data: players } = await supabase
     .from("game_players")
-    .select("id")
+    .select("id, user_id, joined_at")
     .eq("game_id", gameId)
     .order("joined_at", { ascending: true });
 
@@ -244,15 +348,122 @@ export async function startGame(formData: FormData): Promise<void> {
     redirect(`/games/${gameId}?error=min_players`);
   }
 
-  // Assign seat numbers by join order.
+  const { data: roles } = await supabase
+    .from("roles")
+    .select("id, key, alignment");
+
+  const villager = roles?.find((r) => r.key === "villager");
+  if (!roles || !villager) {
+    redirect(`/games/${gameId}?error=roles_unavailable`);
+  }
+
+  const roleByKey = new Map(roles.map((r) => [r.key, r]));
+  const alignmentByRoleId = new Map(roles.map((r) => [r.id, r.alignment]));
+
+  // Build a list of role ids — one per player — from the preset composition,
+  // padding any extra players with villagers (and trimming if necessary).
+  const roleIds: string[] = [];
+  if (game.preset_id) {
+    const { data: items } = await supabase
+      .from("role_preset_items")
+      .select("role_id, count")
+      .eq("preset_id", game.preset_id);
+    for (const item of items ?? []) {
+      for (let i = 0; i < item.count; i++) roleIds.push(item.role_id);
+    }
+  } else {
+    // Custom composition stored on the game (role key -> count). Villagers are
+    // not stored; they fill the remaining seats below.
+    const composition =
+      game.settings &&
+      typeof game.settings === "object" &&
+      !Array.isArray(game.settings)
+        ? ((game.settings as { composition?: Record<string, number> })
+            .composition ?? null)
+        : null;
+    if (composition) {
+      for (const [key, count] of Object.entries(composition)) {
+        const role = roleByKey.get(key);
+        if (role) {
+          for (let i = 0; i < count; i++) roleIds.push(role.id);
+        }
+      }
+    }
+  }
+
+  if (roleIds.length === 0) {
+    // Fallback composition derived from the player count.
+    const mafiaCount = Math.max(1, Math.floor(players.length / 4));
+    const mafia = roleByKey.get("mafia");
+    const detective = roleByKey.get("detective");
+    const healer = roleByKey.get("healer");
+    const sniper = roleByKey.get("sniper");
+    for (let i = 0; i < mafiaCount && mafia; i++) roleIds.push(mafia.id);
+    if (detective) roleIds.push(detective.id);
+    if (healer) roleIds.push(healer.id);
+    if (sniper && players.length >= 7) roleIds.push(sniper.id);
+  }
+
+  while (roleIds.length < players.length) roleIds.push(villager.id);
+  roleIds.length = players.length;
+
+  const shuffledRoles = shuffle(roleIds);
+  const shuffledPlayers = shuffle(players);
+
+  const assignments = shuffledPlayers.map((player, index) => ({
+    game_id: gameId,
+    player_id: player.id,
+    user_id: player.user_id,
+    role_id: shuffledRoles[index],
+    alignment: alignmentByRoleId.get(shuffledRoles[index]) ?? "town",
+  }));
+
+  // Reset any partial assignment from a prior failed attempt, then assign.
+  await supabase.from("game_player_roles").delete().eq("game_id", gameId);
+  const { error: roleError } = await supabase
+    .from("game_player_roles")
+    .insert(assignments);
+  if (roleError) {
+    redirect(`/games/${gameId}?error=${encodeURIComponent(roleError.message)}`);
+  }
+
+  // Seat players in the shuffled (randomized) order.
   await Promise.all(
-    players.map((player, index) =>
+    shuffledPlayers.map((player, index) =>
       supabase
         .from("game_players")
-        .update({ seat: index + 1 })
+        .update({ seat: index + 1, status: "alive" })
         .eq("id", player.id),
     ),
   );
+
+  // Create the town and mafia chat rooms once.
+  const { count: roomCount } = await supabase
+    .from("chat_rooms")
+    .select("id", { count: "exact", head: true })
+    .eq("game_id", gameId);
+  if (!roomCount) {
+    await supabase.from("chat_rooms").insert([
+      { game_id: gameId, type: "town", name: "Town Square" },
+      { game_id: gameId, type: "mafia", name: "Mafia" },
+    ]);
+  }
+
+  // Open the first night phase once.
+  const { count: phaseCount } = await supabase
+    .from("game_phases")
+    .select("id", { count: "exact", head: true })
+    .eq("game_id", gameId);
+  if (!phaseCount) {
+    await supabase.from("game_phases").insert({
+      game_id: gameId,
+      phase_number: 1,
+      phase_type: "night",
+      day_number: 1,
+      status: "active",
+      started_at: new Date().toISOString(),
+    });
+  }
 
   await supabase
     .from("games")

@@ -194,6 +194,62 @@ export type Database = {
           },
         ]
       }
+      game_player_roles: {
+        Row: {
+          alignment: Database["public"]["Enums"]["role_alignment"]
+          created_at: string
+          game_id: string
+          player_id: string
+          role_id: string
+          user_id: string
+        }
+        Insert: {
+          alignment: Database["public"]["Enums"]["role_alignment"]
+          created_at?: string
+          game_id: string
+          player_id: string
+          role_id: string
+          user_id: string
+        }
+        Update: {
+          alignment?: Database["public"]["Enums"]["role_alignment"]
+          created_at?: string
+          game_id?: string
+          player_id?: string
+          role_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "game_player_roles_game_id_fkey"
+            columns: ["game_id"]
+            isOneToOne: false
+            referencedRelation: "games"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "game_player_roles_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "game_players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "game_player_roles_role_id_fkey"
+            columns: ["role_id"]
+            isOneToOne: false
+            referencedRelation: "roles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "game_player_roles_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       game_players: {
         Row: {
           eliminated_at: string | null
