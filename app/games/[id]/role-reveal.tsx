@@ -1,5 +1,15 @@
 import Link from "next/link";
 import { PhaseBar, type PhaseRow } from "./phase-bar";
+import { NightActions, type NightActionProps } from "./night-actions";
+import {
+  DEFAULT_HEALER_SELF_HEALS,
+  DEFAULT_SNIPER_BULLETS,
+} from "@/lib/night";
+
+export type Investigation = {
+  targetName: string;
+  suspicious: boolean;
+} | null;
 
 type RoleInfo = {
   key: string;
@@ -27,9 +37,6 @@ export type RoleConfig = {
   sniper?: { bullets: number | null };
   healer?: { selfHeals: number | null };
 };
-
-const DEFAULT_SNIPER_BULLETS = 2;
-const DEFAULT_HEALER_SELF_HEALS = 1;
 
 function formatLimit(value: number | null | undefined, fallback: number) {
   if (value === null) return "Unlimited";
@@ -75,6 +82,8 @@ export function RoleReveal({
   currentUserId,
   roleConfig,
   phase,
+  night,
+  investigation,
 }: {
   gameId: string;
   gameName: string | null;
@@ -83,6 +92,8 @@ export function RoleReveal({
   currentUserId: string;
   roleConfig?: RoleConfig | null;
   phase?: PhaseRow | null;
+  night?: NightActionProps | null;
+  investigation?: Investigation;
 }) {
   const self = rows.find((r) => r.user_id === currentUserId);
   const selfRole = self ? one(self.role) : null;
@@ -162,6 +173,38 @@ export function RoleReveal({
             </p>
           </section>
         )}
+
+        {night ? <NightActions {...night} /> : null}
+
+        {investigation ? (
+          <section
+            className={`mt-6 rounded-2xl border p-5 ${
+              investigation.suspicious
+                ? "border-red-800/60 bg-red-950/30"
+                : "border-emerald-800/50 bg-emerald-950/20"
+            }`}
+          >
+            <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
+              Your latest finding
+            </p>
+            <p className="mt-1 text-sm text-zinc-200">
+              <span className="font-semibold text-zinc-50">
+                {investigation.targetName}
+              </span>{" "}
+              is{" "}
+              <span
+                className={
+                  investigation.suspicious
+                    ? "font-semibold text-red-300"
+                    : "font-semibold text-emerald-300"
+                }
+              >
+                {investigation.suspicious ? "suspicious" : "not suspicious"}
+              </span>
+              .
+            </p>
+          </section>
+        ) : null}
 
         {self?.alignment === "mafia" ? (
           <section className="mt-6">

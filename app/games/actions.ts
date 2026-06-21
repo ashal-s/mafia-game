@@ -4,6 +4,11 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Json } from "@/lib/database.types";
+import {
+  DEFAULT_HEALER_SELF_HEALS,
+  DEFAULT_SNIPER_BULLETS,
+  nightActionForRole,
+} from "@/lib/night";
 
 export type FormState = { error?: string };
 
@@ -28,9 +33,6 @@ function shuffle<T>(items: T[]): T[] {
   return copy;
 }
 
-const DEFAULT_SNIPER_BULLETS = 2;
-const DEFAULT_HEALER_SELF_HEALS = 1;
-
 // Phase cycle: night → discussion → voting → results → (next day) night.
 type PhaseType = "night" | "discussion" | "voting" | "results";
 const PHASE_ORDER: PhaseType[] = ["night", "discussion", "voting", "results"];
@@ -45,6 +47,36 @@ function nextPhaseOf(current: PhaseType): PhaseType {
   const idx = PHASE_ORDER.indexOf(current);
   return PHASE_ORDER[(idx + 1) % PHASE_ORDER.length];
 }
+
+type DbClient = Awaited<ReturnType<typeof createClient>>;
+
+type RoleConfigShape = {
+  sniper?: { bullets: number | null };
+  healer?: { selfHeals: number | null };
+};
+
+function readRoleConfig(settings: Json | null): RoleConfigShape | null {
+  if (settings && typeof settings === "object" && !Array.isArray(settings)) {
+    return (settings as { roleConfig?: RoleConfigShape }).roleConfig ?? null;
+  }
+  return null;
+}
+
+function one<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}
+
+function profileName(
+  profile:
+    | { username: string | null; display_name: string | null }
+    | { username: string | null; display_name: string | null }[]
+    | null,
+): string {
+  const p = one(profile);
+  return p?.display_name || p?.username || "Player";
+}
+
 
 /**
  * Parses a configurable role limit. The sentinel string "unlimited" maps to
@@ -558,6 +590,12 @@ export async function advancePhase(formData: FormData): Promise<void> {
     now.getTime() + PHASE_DURATIONS_SECONDS[nextType] * 1000,
   );
 
+  // Leaving the night: resolve all submitted night actions before the phase
+  // transitions, applying kills, protection, and private investigation results.
+  if (currentType === "night" && current) {
+    await processNight(supabase, gameId, current.id, currentDay);
+  }
+
   if (current) {
     await supabase
       .from("game_phases")
@@ -603,6 +641,297 @@ export async function advancePhase(formData: FormData): Promise<void> {
   });
 
   revalidatePath(`/games/${gameId}`);
+}
+
+export async function submitNightAction(
+  _prevState: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const { supabase, user } = await requirePlayer();
+
+  const gameId = formData.get("game_id");
+  const rawTarget = formData.get("target_id");
+  if (typeof gameId !== "string" || !gameId) {
+    return { error: "Missing game." };
+  }
+
+  const { data: game } = await supabase
+    .from("games")
+    .select("id, status, settings")
+    .eq("id", gameId)
+    .maybeSingle();
+  if (!game || game.status !== "in_progress") {
+    return { error: "This game is not in progress." };
+  }
+
+  // The active phase must be night.
+  const { data: phase } = await supabase
+    .from("game_phases")
+    .select("id, phase_type, status")
+    .eq("game_id", gameId)
+    .eq("status", "active")
+    .order("phase_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!phase || phase.phase_type !== "night") {
+    return { error: "You can only act during the night." };
+  }
+
+  // The actor must be a living member of this game.
+  const { data: me } = await supabase
+    .from("game_players")
+    .select("id, status")
+    .eq("game_id", gameId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!me) return { error: "You are not in this game." };
+  if (me.status !== "alive") return { error: "Dead players cannot act." };
+
+  const { data: roleRow } = await supabase
+    .from("game_player_roles")
+    .select("alignment, role:roles(key)")
+    .eq("game_id", gameId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const roleKey = one(roleRow?.role)?.key ?? null;
+  const descriptor = nightActionForRole(roleKey, roleRow?.alignment ?? null);
+  if (!descriptor) {
+    return { error: "Your role has no night action." };
+  }
+
+  const targetId =
+    typeof rawTarget === "string" && rawTarget && rawTarget !== "skip"
+      ? rawTarget
+      : null;
+
+  if (!targetId && !descriptor.optional) {
+    return { error: "Choose a target." };
+  }
+
+  if (targetId) {
+    if (targetId === me.id && !descriptor.allowSelf) {
+      return { error: "You cannot target yourself." };
+    }
+    const { data: target } = await supabase
+      .from("game_players")
+      .select("id, status")
+      .eq("id", targetId)
+      .eq("game_id", gameId)
+      .maybeSingle();
+    if (!target || target.status !== "alive") {
+      return { error: "That player is not a valid target." };
+    }
+
+    // Enforce configurable ability limits (bullets / self-heals). Actions in
+    // the current phase don't count yet — they're updates to this submission.
+    const roleConfig = readRoleConfig(game.settings);
+    if (descriptor.type === "sniper_shoot") {
+      const limit = roleConfig?.sniper?.bullets;
+      const max = limit === null ? null : (limit ?? DEFAULT_SNIPER_BULLETS);
+      if (max !== null) {
+        const { count } = await supabase
+          .from("role_actions")
+          .select("id", { count: "exact", head: true })
+          .eq("actor_id", me.id)
+          .eq("action_type", "sniper_shoot")
+          .not("target_id", "is", null)
+          .neq("phase_id", phase.id);
+        if ((count ?? 0) >= max) {
+          return { error: "You are out of bullets." };
+        }
+      }
+    } else if (descriptor.type === "heal" && targetId === me.id) {
+      const limit = roleConfig?.healer?.selfHeals;
+      const max =
+        limit === null ? null : (limit ?? DEFAULT_HEALER_SELF_HEALS);
+      if (max !== null) {
+        const { count } = await supabase
+          .from("role_actions")
+          .select("id", { count: "exact", head: true })
+          .eq("actor_id", me.id)
+          .eq("action_type", "heal")
+          .eq("target_id", me.id)
+          .neq("phase_id", phase.id);
+        if ((count ?? 0) >= max) {
+          return { error: "You have no self-heals left." };
+        }
+      }
+    }
+  }
+
+  const { error } = await supabase.from("role_actions").upsert(
+    {
+      game_id: gameId,
+      phase_id: phase.id,
+      actor_id: me.id,
+      target_id: targetId,
+      action_type: descriptor.type,
+      resolved: false,
+      result: null,
+    },
+    { onConflict: "phase_id,actor_id" },
+  );
+
+  if (error) return { error: error.message };
+
+  revalidatePath(`/games/${gameId}`);
+  return {};
+}
+
+/**
+ * Resolves every night action for a phase: tallies the mafia kill, applies the
+ * sniper shot, honours the healer's protection, records the detective's private
+ * result, marks the dead, and writes notifications / events. Runs as the host
+ * (the only caller is `advancePhase`, which verifies host + running game).
+ */
+async function processNight(
+  supabase: DbClient,
+  gameId: string,
+  phaseId: string,
+  dayNumber: number,
+): Promise<void> {
+  const { data: roleRows } = await supabase
+    .from("game_player_roles")
+    .select(
+      "player_id, user_id, alignment, role:roles(key), profile:profiles(username, display_name)",
+    )
+    .eq("game_id", gameId);
+
+  const { data: players } = await supabase
+    .from("game_players")
+    .select("id, user_id, status")
+    .eq("game_id", gameId);
+
+  const aliveIds = new Set(
+    (players ?? []).filter((p) => p.status === "alive").map((p) => p.id),
+  );
+  const alignmentByPlayer = new Map(
+    (roleRows ?? []).map((r) => [r.player_id, r.alignment as string]),
+  );
+  const userByPlayer = new Map(
+    (roleRows ?? []).map((r) => [r.player_id, r.user_id]),
+  );
+  const nameByPlayer = new Map(
+    (roleRows ?? []).map((r) => [r.player_id, profileName(r.profile)]),
+  );
+
+  const { data: actions } = await supabase
+    .from("role_actions")
+    .select("id, actor_id, target_id, action_type")
+    .eq("phase_id", phaseId);
+  const list = actions ?? [];
+
+  // Mafia kill: pick the target with the most votes among living players.
+  const mafiaVotes = new Map<string, number>();
+  for (const a of list) {
+    if (a.action_type === "mafia_kill" && a.target_id && aliveIds.has(a.target_id)) {
+      mafiaVotes.set(a.target_id, (mafiaVotes.get(a.target_id) ?? 0) + 1);
+    }
+  }
+  let mafiaTarget: string | null = null;
+  let bestVotes = 0;
+  for (const [target, votes] of mafiaVotes) {
+    if (votes > bestVotes) {
+      bestVotes = votes;
+      mafiaTarget = target;
+    }
+  }
+
+  const sniperTarget =
+    list.find(
+      (a) =>
+        a.action_type === "sniper_shoot" &&
+        a.target_id &&
+        aliveIds.has(a.target_id),
+    )?.target_id ?? null;
+
+  const protectedTarget =
+    list.find(
+      (a) => a.action_type === "heal" && a.target_id && aliveIds.has(a.target_id),
+    )?.target_id ?? null;
+
+  // Deaths: mafia target dies unless protected; the sniper's shot always lands.
+  const deaths = new Set<string>();
+  if (mafiaTarget && mafiaTarget !== protectedTarget) deaths.add(mafiaTarget);
+  if (sniperTarget) deaths.add(sniperTarget);
+
+  const now = new Date().toISOString();
+
+  for (const playerId of deaths) {
+    await supabase
+      .from("game_players")
+      .update({ status: "dead", eliminated_at: now })
+      .eq("id", playerId)
+      .eq("game_id", gameId);
+
+    const uid = userByPlayer.get(playerId);
+    if (uid) {
+      await supabase.from("notifications").insert({
+        user_id: uid,
+        game_id: gameId,
+        type: "eliminated",
+        title: "You were eliminated",
+        body: "You did not survive the night.",
+      });
+    }
+    await supabase.from("game_events").insert({
+      game_id: gameId,
+      phase_id: phaseId,
+      actor_id: playerId,
+      event_type: "player_eliminated",
+      data: { player_id: playerId, cause: "night", day_number: dayNumber },
+    });
+  }
+
+  // A successful protection (mafia target was healed) is logged for the timeline.
+  if (mafiaTarget && mafiaTarget === protectedTarget) {
+    await supabase.from("game_events").insert({
+      game_id: gameId,
+      phase_id: phaseId,
+      event_type: "player_saved",
+      data: { player_id: protectedTarget, day_number: dayNumber },
+    });
+  }
+
+  // Detective: save a private suspicious / not-suspicious result + notify them.
+  for (const a of list) {
+    if (a.action_type === "investigate" && a.target_id) {
+      const suspicious = alignmentByPlayer.get(a.target_id) === "mafia";
+      await supabase
+        .from("role_actions")
+        .update({
+          result: { suspicious, target_id: a.target_id },
+          resolved: true,
+        })
+        .eq("id", a.id);
+
+      const detectiveUid = userByPlayer.get(a.actor_id);
+      if (detectiveUid) {
+        const targetName = nameByPlayer.get(a.target_id) ?? "Your target";
+        await supabase.from("notifications").insert({
+          user_id: detectiveUid,
+          game_id: gameId,
+          type: "investigation",
+          title: "Investigation result",
+          body: `${targetName} is ${suspicious ? "suspicious" : "not suspicious"}.`,
+        });
+      }
+    }
+  }
+
+  // Mark any remaining (non-detective) actions resolved.
+  await supabase
+    .from("role_actions")
+    .update({ resolved: true })
+    .eq("phase_id", phaseId)
+    .eq("resolved", false);
+
+  await supabase.from("game_events").insert({
+    game_id: gameId,
+    phase_id: phaseId,
+    event_type: "night_resolved",
+    data: { day_number: dayNumber, deaths: Array.from(deaths) },
+  });
 }
 
 export async function leaveGame(formData: FormData): Promise<void> {
