@@ -1,0 +1,80 @@
+import { redirect } from "next/navigation";
+import { getCurrentUserWithProfile } from "@/lib/profile";
+import { signOut } from "@/app/(auth)/actions";
+
+export default async function DashboardPage() {
+  const { user, profile } = await getCurrentUserWithProfile();
+
+  if (!user) {
+    redirect("/login");
+  }
+
+  // Enforce username before reaching the app.
+  if (!profile?.username) {
+    redirect("/profile/setup");
+  }
+
+  const greetingName = profile.display_name || profile.username;
+
+  return (
+    <div className="flex flex-1 flex-col bg-zinc-950 text-zinc-100">
+      <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
+        <span className="text-lg font-bold tracking-tight text-red-500">
+          Mafia
+        </span>
+        <form action={signOut}>
+          <button
+            type="submit"
+            className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm font-medium text-zinc-300 transition-colors hover:border-zinc-600 hover:text-zinc-100"
+          >
+            Sign out
+          </button>
+        </form>
+      </header>
+
+      <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-12">
+        <h1 className="text-2xl font-semibold text-zinc-50">
+          Welcome, {greetingName}
+        </h1>
+        <p className="mt-1 text-sm text-zinc-400">
+          You&apos;re signed in as{" "}
+          <span className="font-medium text-zinc-200">@{profile.username}</span>.
+        </p>
+
+        <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6">
+            <h2 className="text-base font-semibold text-zinc-100">
+              Create a game
+            </h2>
+            <p className="mt-1 text-sm text-zinc-400">
+              Host a new table and invite your friends.
+            </p>
+            <button
+              type="button"
+              disabled
+              className="mt-4 rounded-lg bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-500"
+            >
+              Coming soon
+            </button>
+          </div>
+
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6">
+            <h2 className="text-base font-semibold text-zinc-100">
+              Join a game
+            </h2>
+            <p className="mt-1 text-sm text-zinc-400">
+              Enter a room code to join an existing table.
+            </p>
+            <button
+              type="button"
+              disabled
+              className="mt-4 rounded-lg bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-500"
+            >
+              Coming soon
+            </button>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
