@@ -15,10 +15,18 @@ export default async function NewGamePage() {
   }
 
   const supabase = await createClient();
-  const { data: presets } = await supabase
-    .from("role_presets")
-    .select("id, name, description, min_players, max_players")
-    .order("min_players", { ascending: true });
+  const [{ data: presets }, { data: roles }] = await Promise.all([
+    supabase
+      .from("role_presets")
+      .select(
+        "id, name, description, min_players, max_players, items:role_preset_items(count, role:roles(key, name, alignment, sort_order))",
+      )
+      .order("min_players", { ascending: true }),
+    supabase
+      .from("roles")
+      .select("id, key, name, alignment, ability, description, sort_order")
+      .order("sort_order", { ascending: true }),
+  ]);
 
   return (
     <div className="flex flex-1 flex-col bg-zinc-950 text-zinc-100">
@@ -40,7 +48,7 @@ export default async function NewGamePage() {
           Pick a role preset, name your table, and invite your friends.
         </p>
 
-        <CreateGameForm presets={presets ?? []} />
+        <CreateGameForm presets={presets ?? []} roles={roles ?? []} />
       </main>
     </div>
   );

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import type { Json } from "@/lib/database.types";
 
 export type FormState = { error?: string };
 
@@ -67,25 +68,68 @@ export async function createGame(
       ? rawName.trim().slice(0, 80)
       : null;
 
-  const presetId =
-    typeof formData.get("preset_id") === "string" &&
-    (formData.get("preset_id") as string).length > 0
-      ? (formData.get("preset_id") as string)
-      : null;
+  const choice = formData.get("setup");
+  if (typeof choice !== "string" || choice.length === 0) {
+    return { error: "Choose a game setup." };
+  }
 
+  let presetId: string | null = null;
   let minPlayers = 5;
   let maxPlayers = 15;
+  let settings: Json = {};
 
-  if (presetId) {
+  if (choice === "custom") {
+    const playerCount = Number(formData.get("players"));
+    if (!Number.isInteger(playerCount) || playerCount < 3 || playerCount > 30) {
+      return { error: "Choose between 3 and 30 players for a custom game." };
+    }
+
+    // Gather a count for each non-villager role; villagers fill the rest.
+    const { data: specialRoles } = await supabase
+      .from("roles")
+      .select("key, alignment")
+      .neq("key", "villager");
+
+    const composition: Record<string, number> = {};
+    let specialsTotal = 0;
+    let mafiaTotal = 0;
+
+    for (const role of specialRoles ?? []) {
+      const raw = formData.get(`count_${role.key}`);
+      const count = raw == null ? 0 : Number(raw);
+      if (!Number.isInteger(count) || count < 0 || count > playerCount) {
+        return { error: `Invalid count for the ${role.key} role.` };
+      }
+      if (count > 0) composition[role.key] = count;
+      specialsTotal += count;
+      if (role.alignment === "mafia") mafiaTotal += count;
+    }
+
+    if (mafiaTotal < 1) {
+      return { error: "Add at least one Mafia role." };
+    }
+    if (specialsTotal > playerCount) {
+      return {
+        error:
+          "You've assigned more special roles than players. Reduce some counts.",
+      };
+    }
+
+    // Custom games run with an exact roster: special roles + villagers = players.
+    minPlayers = playerCount;
+    maxPlayers = playerCount;
+    settings = { composition };
+  } else {
     const { data: preset } = await supabase
       .from("role_presets")
-      .select("min_players, max_players")
-      .eq("id", presetId)
+      .select("id, min_players, max_players")
+      .eq("id", choice)
       .maybeSingle();
 
     if (!preset) {
       return { error: "That role preset no longer exists." };
     }
+    presetId = preset.id;
     minPlayers = preset.min_players;
     maxPlayers = preset.max_players;
   }
@@ -101,6 +145,7 @@ export async function createGame(
         preset_id: presetId,
         min_players: minPlayers,
         max_players: maxPlayers,
+        settings,
       })
       .select("id")
       .single();
@@ -232,7 +277,7 @@ export async function startGame(formData: FormData): Promise<void> {
 
   const { data: game } = await supabase
     .from("games")
-    .select("id, host_id, status, min_players, preset_id")
+    .select("id, host_id, status, min_players, preset_id, settings")
     .eq("id", gameId)
     .maybeSingle();
 
@@ -275,6 +320,24 @@ export async function startGame(formData: FormData): Promise<void> {
       .eq("preset_id", game.preset_id);
     for (const item of items ?? []) {
       for (let i = 0; i < item.count; i++) roleIds.push(item.role_id);
+    }
+  } else {
+    // Custom composition stored on the game (role key -> count). Villagers are
+    // not stored; they fill the remaining seats below.
+    const composition =
+      game.settings &&
+      typeof game.settings === "object" &&
+      !Array.isArray(game.settings)
+        ? ((game.settings as { composition?: Record<string, number> })
+            .composition ?? null)
+        : null;
+    if (composition) {
+      for (const [key, count] of Object.entries(composition)) {
+        const role = roleByKey.get(key);
+        if (role) {
+          for (let i = 0; i < count; i++) roleIds.push(role.id);
+        }
+      }
     }
   }
 

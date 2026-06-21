@@ -68,6 +68,9 @@ export function Lobby({
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
+    // Browser-only value; reading it after mount avoids an SSR hydration
+    // mismatch on the invite URL.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOrigin(window.location.origin);
   }, []);
 
