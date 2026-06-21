@@ -31,6 +31,21 @@ function shuffle<T>(items: T[]): T[] {
 const DEFAULT_SNIPER_BULLETS = 2;
 const DEFAULT_HEALER_SELF_HEALS = 1;
 
+// Phase cycle: night → discussion → voting → results → (next day) night.
+type PhaseType = "night" | "discussion" | "voting" | "results";
+const PHASE_ORDER: PhaseType[] = ["night", "discussion", "voting", "results"];
+const PHASE_DURATIONS_SECONDS: Record<PhaseType, number> = {
+  night: 60,
+  discussion: 120,
+  voting: 60,
+  results: 30,
+};
+
+function nextPhaseOf(current: PhaseType): PhaseType {
+  const idx = PHASE_ORDER.indexOf(current);
+  return PHASE_ORDER[(idx + 1) % PHASE_ORDER.length];
+}
+
 /**
  * Parses a configurable role limit. The sentinel string "unlimited" maps to
  * `null` (no limit); otherwise we expect a small non-negative integer and fall
@@ -454,23 +469,140 @@ export async function startGame(formData: FormData): Promise<void> {
     .from("game_phases")
     .select("id", { count: "exact", head: true })
     .eq("game_id", gameId);
+
+  let firstPhaseId: string | null = null;
   if (!phaseCount) {
-    await supabase.from("game_phases").insert({
-      game_id: gameId,
-      phase_number: 1,
-      phase_type: "night",
-      day_number: 1,
-      status: "active",
-      started_at: new Date().toISOString(),
-    });
+    const now = new Date();
+    const endsAt = new Date(now.getTime() + PHASE_DURATIONS_SECONDS.night * 1000);
+    const { data: phase } = await supabase
+      .from("game_phases")
+      .insert({
+        game_id: gameId,
+        phase_number: 1,
+        phase_type: "night",
+        day_number: 1,
+        status: "active",
+        started_at: now.toISOString(),
+        ends_at: endsAt.toISOString(),
+      })
+      .select("id")
+      .single();
+    firstPhaseId = phase?.id ?? null;
+
+    if (firstPhaseId) {
+      await supabase.from("game_events").insert({
+        game_id: gameId,
+        phase_id: firstPhaseId,
+        event_type: "phase_started",
+        data: { phase_type: "night", day_number: 1, phase_number: 1 },
+      });
+    }
+  } else {
+    const { data: active } = await supabase
+      .from("game_phases")
+      .select("id")
+      .eq("game_id", gameId)
+      .eq("status", "active")
+      .order("phase_number", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    firstPhaseId = active?.id ?? null;
   }
 
   await supabase
     .from("games")
-    .update({ status: "in_progress", started_at: new Date().toISOString() })
+    .update({
+      status: "in_progress",
+      started_at: new Date().toISOString(),
+      current_phase_id: firstPhaseId,
+    })
     .eq("id", gameId);
 
   redirect(`/games/${gameId}`);
+}
+
+export async function advancePhase(formData: FormData): Promise<void> {
+  const { supabase, user } = await requirePlayer();
+  const gameId = formData.get("game_id");
+  if (typeof gameId !== "string") return;
+
+  const { data: game } = await supabase
+    .from("games")
+    .select("id, host_id, status")
+    .eq("id", gameId)
+    .maybeSingle();
+
+  // Only the host can advance, and only while the game is running.
+  if (!game || game.host_id !== user.id || game.status !== "in_progress") {
+    redirect(`/games/${gameId}`);
+  }
+
+  const { data: current } = await supabase
+    .from("game_phases")
+    .select("id, phase_number, phase_type, day_number")
+    .eq("game_id", gameId)
+    .eq("status", "active")
+    .order("phase_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const now = new Date();
+  const currentType = (current?.phase_type ?? "results") as PhaseType;
+  const currentDay = current?.day_number ?? 1;
+
+  const nextType = nextPhaseOf(currentType);
+  // A full cycle completes when results rolls back to night — bump the day.
+  const nextDay = currentType === "results" ? currentDay + 1 : currentDay;
+  const nextNumber = (current?.phase_number ?? 0) + 1;
+  const endsAt = new Date(
+    now.getTime() + PHASE_DURATIONS_SECONDS[nextType] * 1000,
+  );
+
+  if (current) {
+    await supabase
+      .from("game_phases")
+      .update({ status: "completed", ended_at: now.toISOString() })
+      .eq("id", current.id);
+  }
+
+  const { data: next, error: nextError } = await supabase
+    .from("game_phases")
+    .insert({
+      game_id: gameId,
+      phase_number: nextNumber,
+      phase_type: nextType,
+      day_number: nextDay,
+      status: "active",
+      started_at: now.toISOString(),
+      ends_at: endsAt.toISOString(),
+    })
+    .select("id")
+    .single();
+
+  if (nextError || !next) {
+    redirect(
+      `/games/${gameId}?error=${encodeURIComponent(nextError?.message ?? "phase")}`,
+    );
+  }
+
+  await supabase
+    .from("games")
+    .update({ current_phase_id: next.id })
+    .eq("id", gameId);
+
+  await supabase.from("game_events").insert({
+    game_id: gameId,
+    phase_id: next.id,
+    event_type: "phase_changed",
+    data: {
+      from: current?.phase_type ?? null,
+      to: nextType,
+      day_number: nextDay,
+      phase_number: nextNumber,
+    },
+  });
+
+  revalidatePath(`/games/${gameId}`);
 }
 
 export async function leaveGame(formData: FormData): Promise<void> {

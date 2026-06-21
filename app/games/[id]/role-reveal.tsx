@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PhaseBar, type PhaseRow } from "./phase-bar";
 
 type RoleInfo = {
   key: string;
@@ -67,17 +68,21 @@ const ALIGNMENT_STYLES: Record<
 };
 
 export function RoleReveal({
+  gameId,
   gameName,
   rows,
   isHost,
   currentUserId,
   roleConfig,
+  phase,
 }: {
+  gameId: string;
   gameName: string | null;
   rows: RoleRow[];
   isHost: boolean;
   currentUserId: string;
   roleConfig?: RoleConfig | null;
+  phase?: PhaseRow | null;
 }) {
   const self = rows.find((r) => r.user_id === currentUserId);
   const selfRole = self ? one(self.role) : null;
@@ -109,25 +114,17 @@ export function RoleReveal({
         <Link href="/dashboard" className="text-lg font-bold tracking-tight text-red-500">
           Mafia
         </Link>
-        <span className="rounded-full border border-indigo-700/50 bg-indigo-950/30 px-3 py-1 text-xs font-medium text-indigo-300">
-          Night 1
+        <span className="text-xs font-medium uppercase tracking-widest text-zinc-500">
+          {gameName || "Mafia game"}
         </span>
       </header>
 
       <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-10">
-        <p className="text-xs font-medium uppercase tracking-widest text-zinc-500">
-          {gameName || "Mafia game"}
-        </p>
-        <h1 className="mt-1 text-2xl font-semibold text-zinc-50">
-          The game has begun
-        </h1>
-        <p className="mt-1 text-sm text-zinc-400">
-          Roles have been dealt. Keep yours secret — the first night is underway.
-        </p>
+        <PhaseBar gameId={gameId} isHost={isHost} initialPhase={phase ?? null} />
 
         {self && selfRole && selfStyle ? (
           <section
-            className={`mt-6 rounded-2xl border p-6 ${selfStyle.card}`}
+            className={`mt-8 rounded-2xl border p-6 ${selfStyle.card}`}
           >
             <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
               Your role

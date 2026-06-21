@@ -66,10 +66,19 @@ export default async function GamePage({
   }
 
   if (game.status === "in_progress") {
-    const { data: roleRows } = await supabase
-      .from("game_player_roles")
-      .select(ROLE_SELECT)
-      .eq("game_id", id);
+    const [{ data: roleRows }, { data: phase }] = await Promise.all([
+      supabase.from("game_player_roles").select(ROLE_SELECT).eq("game_id", id),
+      supabase
+        .from("game_phases")
+        .select(
+          "id, phase_type, day_number, phase_number, status, started_at, ends_at",
+        )
+        .eq("game_id", id)
+        .eq("status", "active")
+        .order("phase_number", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
 
     const roleConfig =
       game.settings &&
@@ -80,11 +89,13 @@ export default async function GamePage({
 
     return (
       <RoleReveal
+        gameId={game.id}
         gameName={game.name}
         rows={roleRows ?? []}
         isHost={isHost}
         currentUserId={user.id}
         roleConfig={roleConfig}
+        phase={phase ?? null}
       />
     );
   }
