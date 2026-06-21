@@ -155,6 +155,7 @@ export type Database = {
           created_at: string
           day_number: number
           ended_at: string | null
+          ends_at: string | null
           game_id: string
           id: string
           phase_number: number
@@ -166,6 +167,7 @@ export type Database = {
           created_at?: string
           day_number?: number
           ended_at?: string | null
+          ends_at?: string | null
           game_id: string
           id?: string
           phase_number: number
@@ -177,6 +179,7 @@ export type Database = {
           created_at?: string
           day_number?: number
           ended_at?: string | null
+          ends_at?: string | null
           game_id?: string
           id?: string
           phase_number?: number
@@ -315,6 +318,7 @@ export type Database = {
         Row: {
           code: string
           created_at: string
+          current_phase_id: string | null
           ended_at: string | null
           host_id: string
           id: string
@@ -331,6 +335,7 @@ export type Database = {
         Insert: {
           code: string
           created_at?: string
+          current_phase_id?: string | null
           ended_at?: string | null
           host_id: string
           id?: string
@@ -349,6 +354,7 @@ export type Database = {
         Update: {
           code?: string
           created_at?: string
+          current_phase_id?: string | null
           ended_at?: string | null
           host_id?: string
           id?: string
@@ -365,6 +371,13 @@ export type Database = {
             | null
         }
         Relationships: [
+          {
+            foreignKeyName: "games_current_phase_id_fkey"
+            columns: ["current_phase_id"]
+            isOneToOne: false
+            referencedRelation: "game_phases"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "games_host_id_fkey"
             columns: ["host_id"]
@@ -738,7 +751,7 @@ export type Database = {
     Enums: {
       chat_room_type: "town" | "mafia" | "dead" | "system"
       game_phase_status: "pending" | "active" | "completed"
-      game_phase_type: "day" | "night"
+      game_phase_type: "day" | "night" | "discussion" | "voting" | "results"
       game_player_status: "alive" | "dead" | "left"
       game_status: "lobby" | "in_progress" | "completed" | "cancelled"
       role_alignment: "town" | "mafia" | "neutral"
@@ -871,7 +884,7 @@ export const Constants = {
     Enums: {
       chat_room_type: ["town", "mafia", "dead", "system"],
       game_phase_status: ["pending", "active", "completed"],
-      game_phase_type: ["day", "night"],
+      game_phase_type: ["day", "night", "discussion", "voting", "results"],
       game_player_status: ["alive", "dead", "left"],
       game_status: ["lobby", "in_progress", "completed", "cancelled"],
       role_alignment: ["town", "mafia", "neutral"],
