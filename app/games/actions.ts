@@ -225,6 +225,23 @@ export async function createGame(
       ),
     };
   }
+  // A game has one night per round, so it can never run more rounds than there
+  // are players — cap bullets / self-heals to that ceiling (unlimited stays null).
+  const maxRounds = maxPlayers;
+  if (
+    roleConfig.sniper &&
+    roleConfig.sniper.bullets !== null &&
+    roleConfig.sniper.bullets > maxRounds
+  ) {
+    roleConfig.sniper.bullets = maxRounds;
+  }
+  if (
+    roleConfig.healer &&
+    roleConfig.healer.selfHeals !== null &&
+    roleConfig.healer.selfHeals > maxRounds
+  ) {
+    roleConfig.healer.selfHeals = maxRounds;
+  }
   if (Object.keys(roleConfig).length > 0) {
     settingsObj.roleConfig = roleConfig;
   }

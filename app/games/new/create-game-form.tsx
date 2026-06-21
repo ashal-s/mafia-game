@@ -102,6 +102,7 @@ function LimitRow({
   unlimited,
   setUnlimited,
   min,
+  max,
   name,
 }: {
   title: string;
@@ -111,8 +112,12 @@ function LimitRow({
   unlimited: boolean;
   setUnlimited: (next: boolean) => void;
   min: number;
+  max: number;
   name: string;
 }) {
+  // Never submit (or display) more than the cap, even if the value was set
+  // higher before the player count / preset changed.
+  const effective = clamp(value, min, max);
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-2.5">
       <div className="flex items-center justify-between gap-3">
@@ -122,10 +127,10 @@ function LimitRow({
         </div>
         <div className={unlimited ? "pointer-events-none opacity-40" : ""}>
           <Stepper
-            value={value}
-            onChange={(v) => setValue(clamp(v, min, 99))}
+            value={effective}
+            onChange={(v) => setValue(clamp(v, min, max))}
             min={min}
-            max={99}
+            max={max}
           />
         </div>
       </div>
@@ -136,9 +141,13 @@ function LimitRow({
           onChange={(e) => setUnlimited(e.target.checked)}
           className="accent-red-500"
         />
-        Unlimited (no limit)
+        Unlimited (capped at {max} per game)
       </label>
-      <input type="hidden" name={name} value={unlimited ? "unlimited" : value} />
+      <input
+        type="hidden"
+        name={name}
+        value={unlimited ? "unlimited" : effective}
+      />
     </div>
   );
 }
@@ -205,6 +214,13 @@ export function CreateGameForm({
     .filter((r) => r.alignment === "mafia")
     .reduce((sum, r) => sum + (counts[r.key] ?? 0), 0);
   const villagers = players - specialsTotal;
+  const seatsLeft = Math.max(0, players - specialsTotal);
+
+  const selectedPreset = presets.find((p) => p.id === setup);
+  // Each round has exactly one night, so a game can never run more rounds than
+  // there are players — that's the ceiling for bullets / self-heals.
+  const maxRounds =
+    setup === "custom" ? players : (selectedPreset?.max_players ?? 15);
 
   const customInvalid =
     setup === "custom" &&
@@ -368,7 +384,7 @@ export function CreateGameForm({
                   value={counts[role.key] ?? 0}
                   onChange={(v) => setCount(role.key, v)}
                   min={0}
-                  max={players}
+                  max={(counts[role.key] ?? 0) + seatsLeft}
                 />
                 <input
                   type="hidden"
@@ -436,12 +452,13 @@ export function CreateGameForm({
           {includesSniper ? (
             <LimitRow
               title="Sniper bullets"
-              subtitle="Shots the sniper can fire across the whole game."
+              subtitle={`Shots the sniper can fire across the whole game (max ${maxRounds}).`}
               value={sniperBullets}
               setValue={setSniperBullets}
               unlimited={sniperUnlimited}
               setUnlimited={setSniperUnlimited}
               min={1}
+              max={maxRounds}
               name="sniper_bullets"
             />
           ) : null}
@@ -449,12 +466,13 @@ export function CreateGameForm({
           {includesHealer ? (
             <LimitRow
               title="Healer self-heals"
-              subtitle="Times the healer may protect themselves."
+              subtitle={`Times the healer may protect themselves (max ${maxRounds}).`}
               value={healerSelfHeals}
               setValue={setHealerSelfHeals}
               unlimited={healerUnlimited}
               setUnlimited={setHealerUnlimited}
               min={0}
+              max={maxRounds}
               name="healer_self_heals"
             />
           ) : null}
