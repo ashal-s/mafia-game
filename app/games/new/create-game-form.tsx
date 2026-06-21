@@ -94,6 +94,55 @@ function Stepper({
   );
 }
 
+function LimitRow({
+  title,
+  subtitle,
+  value,
+  setValue,
+  unlimited,
+  setUnlimited,
+  min,
+  name,
+}: {
+  title: string;
+  subtitle: string;
+  value: number;
+  setValue: (next: number) => void;
+  unlimited: boolean;
+  setUnlimited: (next: boolean) => void;
+  min: number;
+  name: string;
+}) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-zinc-100">{title}</p>
+          <p className="mt-0.5 text-xs text-zinc-500">{subtitle}</p>
+        </div>
+        <div className={unlimited ? "pointer-events-none opacity-40" : ""}>
+          <Stepper
+            value={value}
+            onChange={(v) => setValue(clamp(v, min, 99))}
+            min={min}
+            max={99}
+          />
+        </div>
+      </div>
+      <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+        <input
+          type="checkbox"
+          checked={unlimited}
+          onChange={(e) => setUnlimited(e.target.checked)}
+          className="accent-red-500"
+        />
+        Unlimited (no limit)
+      </label>
+      <input type="hidden" name={name} value={unlimited ? "unlimited" : value} />
+    </div>
+  );
+}
+
 export function CreateGameForm({
   presets,
   roles,
@@ -123,6 +172,30 @@ export function CreateGameForm({
     }
     return init;
   });
+
+  const [sniperBullets, setSniperBullets] = useState(2);
+  const [sniperUnlimited, setSniperUnlimited] = useState(false);
+  const [healerSelfHeals, setHealerSelfHeals] = useState(1);
+  const [healerUnlimited, setHealerUnlimited] = useState(false);
+
+  const presetRoleKeys = useMemo(() => {
+    const preset = presets.find((p) => p.id === setup);
+    const keys = new Set<string>();
+    for (const item of preset?.items ?? []) {
+      const role = one(item.role);
+      if (role) keys.add(role.key);
+    }
+    return keys;
+  }, [presets, setup]);
+
+  const includesSniper =
+    setup === "custom"
+      ? (counts["sniper"] ?? 0) > 0
+      : presetRoleKeys.has("sniper");
+  const includesHealer =
+    setup === "custom"
+      ? (counts["healer"] ?? 0) > 0
+      : presetRoleKeys.has("healer");
 
   const specialsTotal = specials.reduce(
     (sum, r) => sum + (counts[r.key] ?? 0),
@@ -347,6 +420,43 @@ export function CreateGameForm({
               {players} players. Remove {specialsTotal - players} or add more
               players.
             </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {includesSniper || includesHealer ? (
+        <div className="space-y-3 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5">
+          <div>
+            <p className="text-sm font-medium text-zinc-200">Role options</p>
+            <p className="text-xs text-zinc-500">
+              Fine-tune how the special abilities work.
+            </p>
+          </div>
+
+          {includesSniper ? (
+            <LimitRow
+              title="Sniper bullets"
+              subtitle="Shots the sniper can fire across the whole game."
+              value={sniperBullets}
+              setValue={setSniperBullets}
+              unlimited={sniperUnlimited}
+              setUnlimited={setSniperUnlimited}
+              min={1}
+              name="sniper_bullets"
+            />
+          ) : null}
+
+          {includesHealer ? (
+            <LimitRow
+              title="Healer self-heals"
+              subtitle="Times the healer may protect themselves."
+              value={healerSelfHeals}
+              setValue={setHealerSelfHeals}
+              unlimited={healerUnlimited}
+              setUnlimited={setHealerUnlimited}
+              min={0}
+              name="healer_self_heals"
+            />
           ) : null}
         </div>
       ) : null}

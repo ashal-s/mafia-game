@@ -28,6 +28,24 @@ function shuffle<T>(items: T[]): T[] {
   return copy;
 }
 
+const DEFAULT_SNIPER_BULLETS = 2;
+const DEFAULT_HEALER_SELF_HEALS = 1;
+
+/**
+ * Parses a configurable role limit. The sentinel string "unlimited" maps to
+ * `null` (no limit); otherwise we expect a small non-negative integer and fall
+ * back to the provided default when the value is missing or invalid.
+ */
+function parseRoleLimit(
+  raw: FormDataEntryValue | null,
+  fallback: number,
+): number | null {
+  if (raw === "unlimited") return null;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n >= 0 && n <= 99) return n;
+  return fallback;
+}
+
 /**
  * Ensures there is an authenticated user with a completed profile (username).
  * Redirects to login / profile setup otherwise. Never call inside try/catch —
@@ -76,7 +94,13 @@ export async function createGame(
   let presetId: string | null = null;
   let minPlayers = 5;
   let maxPlayers = 15;
-  let settings: Json = {};
+  const settingsObj: {
+    composition?: Record<string, number>;
+    roleConfig?: {
+      sniper?: { bullets: number | null };
+      healer?: { selfHeals: number | null };
+    };
+  } = {};
 
   if (choice === "custom") {
     const playerCount = Number(formData.get("players"));
@@ -118,7 +142,7 @@ export async function createGame(
     // Custom games run with an exact roster: special roles + villagers = players.
     minPlayers = playerCount;
     maxPlayers = playerCount;
-    settings = { composition };
+    settingsObj.composition = composition;
   } else {
     const { data: preset } = await supabase
       .from("role_presets")
@@ -133,6 +157,32 @@ export async function createGame(
     minPlayers = preset.min_players;
     maxPlayers = preset.max_players;
   }
+
+  // Optional per-role limits. The form only submits these fields when the
+  // relevant role is part of the chosen setup, so their presence implies the
+  // role is in play. `null` means unlimited.
+  const roleConfig: NonNullable<typeof settingsObj.roleConfig> = {};
+  if (formData.has("sniper_bullets")) {
+    roleConfig.sniper = {
+      bullets: parseRoleLimit(
+        formData.get("sniper_bullets"),
+        DEFAULT_SNIPER_BULLETS,
+      ),
+    };
+  }
+  if (formData.has("healer_self_heals")) {
+    roleConfig.healer = {
+      selfHeals: parseRoleLimit(
+        formData.get("healer_self_heals"),
+        DEFAULT_HEALER_SELF_HEALS,
+      ),
+    };
+  }
+  if (Object.keys(roleConfig).length > 0) {
+    settingsObj.roleConfig = roleConfig;
+  }
+
+  const settings = settingsObj as Json;
 
   let gameId: string | null = null;
   for (let attempt = 0; attempt < 5 && !gameId; attempt++) {
@@ -347,11 +397,11 @@ export async function startGame(formData: FormData): Promise<void> {
     const mafia = roleByKey.get("mafia");
     const detective = roleByKey.get("detective");
     const healer = roleByKey.get("healer");
-    const mayor = roleByKey.get("mayor");
+    const sniper = roleByKey.get("sniper");
     for (let i = 0; i < mafiaCount && mafia; i++) roleIds.push(mafia.id);
     if (detective) roleIds.push(detective.id);
     if (healer) roleIds.push(healer.id);
-    if (mayor && players.length >= 7) roleIds.push(mayor.id);
+    if (sniper && players.length >= 7) roleIds.push(sniper.id);
   }
 
   while (roleIds.length < players.length) roleIds.push(villager.id);

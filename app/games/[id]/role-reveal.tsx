@@ -22,6 +22,19 @@ export type RoleRow = {
   profile: ProfileInfo | ProfileInfo[] | null;
 };
 
+export type RoleConfig = {
+  sniper?: { bullets: number | null };
+  healer?: { selfHeals: number | null };
+};
+
+const DEFAULT_SNIPER_BULLETS = 2;
+const DEFAULT_HEALER_SELF_HEALS = 1;
+
+function formatLimit(value: number | null | undefined, fallback: number) {
+  if (value === null) return "Unlimited";
+  return String(value ?? fallback);
+}
+
 function one<T>(value: T | T[] | null): T | null {
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -58,15 +71,33 @@ export function RoleReveal({
   rows,
   isHost,
   currentUserId,
+  roleConfig,
 }: {
   gameName: string | null;
   rows: RoleRow[];
   isHost: boolean;
   currentUserId: string;
+  roleConfig?: RoleConfig | null;
 }) {
   const self = rows.find((r) => r.user_id === currentUserId);
   const selfRole = self ? one(self.role) : null;
   const selfStyle = self ? ALIGNMENT_STYLES[self.alignment] : null;
+
+  let selfLimit: { label: string; value: string } | null = null;
+  if (selfRole?.key === "sniper") {
+    selfLimit = {
+      label: "Bullets",
+      value: formatLimit(roleConfig?.sniper?.bullets, DEFAULT_SNIPER_BULLETS),
+    };
+  } else if (selfRole?.key === "healer") {
+    selfLimit = {
+      label: "Self-heals",
+      value: formatLimit(
+        roleConfig?.healer?.selfHeals,
+        DEFAULT_HEALER_SELF_HEALS,
+      ),
+    };
+  }
 
   const mafiaTeammates = rows.filter(
     (r) => r.user_id !== currentUserId && r.alignment === "mafia",
@@ -115,6 +146,16 @@ export function RoleReveal({
               <p className="mt-3 text-sm text-zinc-300">
                 {selfRole.description}
               </p>
+            ) : null}
+            {selfLimit ? (
+              <div className="mt-4 inline-flex items-center gap-2 rounded-lg border border-zinc-700/60 bg-zinc-950/40 px-3 py-1.5">
+                <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                  {selfLimit.label}
+                </span>
+                <span className="font-mono text-sm font-semibold text-zinc-100">
+                  {selfLimit.value}
+                </span>
+              </div>
             ) : null}
           </section>
         ) : (

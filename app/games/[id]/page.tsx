@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentUserWithProfile } from "@/lib/profile";
 import { Lobby } from "./lobby";
-import { RoleReveal } from "./role-reveal";
+import { RoleReveal, type RoleConfig } from "./role-reveal";
 
 const PLAYER_SELECT =
   "id, user_id, is_host, is_ready, seat, joined_at, profile:profiles!game_players_user_id_fkey(username, display_name)";
@@ -33,7 +33,7 @@ export default async function GamePage({
 
   const { data: game } = await supabase
     .from("games")
-    .select("id, code, name, status, min_players, max_players, host_id")
+    .select("id, code, name, status, min_players, max_players, host_id, settings")
     .eq("id", id)
     .maybeSingle();
 
@@ -71,12 +71,20 @@ export default async function GamePage({
       .select(ROLE_SELECT)
       .eq("game_id", id);
 
+    const roleConfig =
+      game.settings &&
+      typeof game.settings === "object" &&
+      !Array.isArray(game.settings)
+        ? ((game.settings as { roleConfig?: RoleConfig }).roleConfig ?? null)
+        : null;
+
     return (
       <RoleReveal
         gameName={game.name}
         rows={roleRows ?? []}
         isHost={isHost}
         currentUserId={user.id}
+        roleConfig={roleConfig}
       />
     );
   }
