@@ -1,26 +1,208 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #050508;
+  --foreground: #f4f4f5;
+  --font-geist-sans: var(--font-geist-sans);
+  --font-geist-mono: var(--font-geist-mono);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+@theme {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+/* Base Body Premium Styles */
 body {
-  background: var(--background);
+  background-color: #040407;
+  background-image: 
+    /* Soft crimson ambient lighting in center for suspense (Mafia game theme) */
+    radial-gradient(circle at 50% 40%, rgba(220, 38, 38, 0.05), transparent 45%),
+    /* Luminous indigo ambient glow in top-left for premium depth */
+    radial-gradient(circle at 10% 10%, rgba(99, 102, 241, 0.04), transparent 35%),
+    /* Subtle blue-sky ambient glow in bottom-right */
+    radial-gradient(circle at 90% 90%, rgba(14, 165, 233, 0.025), transparent 35%),
+    /* Faint, precise grid dot pattern for high-end futuristic feel */
+    radial-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 20px 20px;
+  background-attachment: fixed;
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* Make page root containers transparent to let the body background patterns shine through */
+.bg-zinc-950 {
+  background-color: transparent !important;
+}
+
+/* Global Premium Typography Overrides */
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.025em;
+}
+
+/* Luxury Glassmorphism Card Style overrides for existing tailwind cards */
+.bg-zinc-900\/60,
+section.bg-zinc-900\/60 {
+  background-color: rgba(13, 13, 16, 0.5) !important;
+  backdrop-filter: blur(16px) !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
+  box-shadow: 
+    0 8px 32px 0 rgba(0, 0, 0, 0.4),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.03) !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.bg-zinc-900\/60:hover,
+section.bg-zinc-900\/60:hover {
+  background-color: rgba(18, 18, 22, 0.6) !important;
+  border-color: rgba(239, 68, 68, 0.15) !important; /* soft red mafia border glow */
+  box-shadow: 
+    0 12px 40px rgba(239, 68, 68, 0.03), /* very soft ambient red glow */
+    0 10px 40px rgba(0, 0, 0, 0.5),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.05) !important;
+  transform: translateY(-2px);
+}
+
+/* Input Fields Overrides with Luminous Focused States */
+input[type="text"], 
+input[type="password"], 
+input[type="email"],
+input[type="number"],
+textarea {
+  background-color: rgba(8, 8, 11, 0.75) !important;
+  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6) !important;
+  border-radius: 8px !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+input[type="text"]:focus, 
+input[type="password"]:focus, 
+input[type="email"]:focus,
+input[type="number"]:focus,
+textarea:focus {
+  border-color: rgba(239, 68, 68, 0.35) !important; /* Luminous soft red for Mafia theme */
+  box-shadow: 
+    0 0 18px rgba(239, 68, 68, 0.12),
+    inset 0 1px 2px rgba(0, 0, 0, 0.4) !important;
+  background-color: rgba(6, 6, 8, 0.9) !important;
+  outline: none !important;
+}
+
+/* Luminous Action Buttons Overrides */
+.bg-red-600 {
+  background: linear-gradient(135deg, #e11d48, #be123c) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 
+    0 2px 10px rgba(225, 29, 72, 0.12),
+    inset 0 1px 1px rgba(255, 255, 255, 0.15) !important;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.2);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.bg-red-600:hover:not(:disabled) {
+  background: linear-gradient(135deg, #f43f5e, #e11d48) !important;
+  box-shadow: 
+    0 6px 20px rgba(225, 29, 72, 0.3),
+    inset 0 1px 1px rgba(255, 255, 255, 0.2) !important;
+  transform: translateY(-1px);
+}
+
+.bg-red-600:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* Secondary Button Overrides with Subtle Glow Hover */
+.border-zinc-700 {
+  border-color: rgba(255, 255, 255, 0.09) !important;
+  background-color: rgba(255, 255, 255, 0.02) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3) !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.border-zinc-700:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  background-color: rgba(255, 255, 255, 0.06) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
+  transform: translateY(-1px);
+}
+
+.border-zinc-700:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* Glass Header Styling */
+header {
+  backdrop-filter: blur(16px) !important;
+  background-color: rgba(4, 4, 7, 0.45) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+}
+
+/* Global Border Custom Property overrides */
+.border-zinc-800 {
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+/* Soft Radial Glass Highlights on Custom Nested Cards */
+.bg-zinc-950\/40,
+.bg-zinc-950\/30 {
+  background-color: rgba(1, 1, 2, 0.4) !important;
+  border-color: rgba(255, 255, 255, 0.04) !important;
+  backdrop-filter: blur(8px);
+}
+
+/* Role Cards & Phase Cards High-end Backdrop Styling */
+[class*="bg-red-950"], 
+[class*="bg-emerald-950"], 
+[class*="bg-amber-950"],
+[class*="bg-indigo-950"],
+[class*="bg-sky-950"] {
+  backdrop-filter: blur(12px) !important;
+  box-shadow: 
+    0 10px 40px rgba(0, 0, 0, 0.4),
+    inset 0 1px 1px rgba(255, 255, 255, 0.03) !important;
+}
+
+/* Modern Tables Styling */
+table {
+  background: transparent !important;
+}
+
+thead {
+  background-color: rgba(10, 10, 12, 0.6) !important;
+}
+
+tbody tr {
+  transition: background-color 0.2s ease;
+}
+
+tbody tr:hover {
+  background-color: rgba(255, 255, 255, 0.02) !important;
+}
+
+/* Badges Premium Outline */
+.rounded-full.border {
+  border-color: rgba(255, 255, 255, 0.1) !important;
 }
