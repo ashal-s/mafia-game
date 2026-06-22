@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { sendPushToUsers } from "@/lib/push/send";
 import type { Json } from "@/lib/database.types";
 import {
   DEFAULT_HEALER_SELF_HEALS,
@@ -102,6 +104,15 @@ async function notifyUsers(
       body,
     })),
   );
+
+  // Mirror the in-app notification to a native Web Push so locked phones get a
+  // lock-screen alert. Best-effort: never let push failures break game flow.
+  await sendPushToUsers(unique, {
+    title,
+    body,
+    url: `/games/${gameId}`,
+    tag: `${gameId}:${type}`,
+  }).catch(() => {});
 }
 
 /**
@@ -694,22 +705,20 @@ export async function startGame(formData: FormData): Promise<void> {
   redirect(`/games/${gameId}`);
 }
 
-export async function advancePhase(formData: FormData): Promise<void> {
-  const { supabase, user } = await requirePlayer();
-  const gameId = formData.get("game_id");
-  if (typeof gameId !== "string") return;
-
-  const { data: game } = await supabase
-    .from("games")
-    .select("id, host_id, status")
-    .eq("id", gameId)
-    .maybeSingle();
-
-  // Only the host can advance, and only while the game is running.
-  if (!game || game.host_id !== user.id || game.status !== "in_progress") {
-    redirect(`/games/${gameId}`);
-  }
-
+/**
+ * Core phase-transition engine, shared by the host's manual "advance" action and
+ * the server-side auto-advance cron. Closes the active phase (resolving night or
+ * voting first), ends the game on a win, or opens the next phase and fans out the
+ * phase-start notifications.
+ *
+ * Pure of auth, redirects, and revalidation so it can run with either a
+ * request-scoped host client (RLS) or the service-role client (cron). The caller
+ * is responsible for authorising and for any redirect/revalidate.
+ */
+async function transitionPhase(
+  supabase: DbClient,
+  gameId: string,
+): Promise<{ ended: boolean; error?: string }> {
   const { data: current } = await supabase
     .from("game_phases")
     .select("id, phase_number, phase_type, day_number")
@@ -746,8 +755,7 @@ export async function advancePhase(formData: FormData): Promise<void> {
     const winner = await evaluateGameWinner(supabase, gameId);
     if (winner) {
       await endGame(supabase, gameId, current.id, winner);
-      revalidatePath(`/games/${gameId}`);
-      return;
+      return { ended: true };
     }
   }
 
@@ -773,9 +781,7 @@ export async function advancePhase(formData: FormData): Promise<void> {
     .single();
 
   if (nextError || !next) {
-    redirect(
-      `/games/${gameId}?error=${encodeURIComponent(nextError?.message ?? "phase")}`,
-    );
+    return { ended: false, error: nextError?.message ?? "phase" };
   }
 
   await supabase
@@ -797,7 +803,84 @@ export async function advancePhase(formData: FormData): Promise<void> {
 
   await notifyPhaseStart(supabase, gameId, nextType, nextDay);
 
+  return { ended: false };
+}
+
+export async function advancePhase(formData: FormData): Promise<void> {
+  const { supabase, user } = await requirePlayer();
+  const gameId = formData.get("game_id");
+  if (typeof gameId !== "string") return;
+
+  const { data: game } = await supabase
+    .from("games")
+    .select("id, host_id, status")
+    .eq("id", gameId)
+    .maybeSingle();
+
+  // Only the host can advance, and only while the game is running.
+  if (!game || game.host_id !== user.id || game.status !== "in_progress") {
+    redirect(`/games/${gameId}`);
+  }
+
+  const result = await transitionPhase(supabase, gameId);
+  if (result.error) {
+    redirect(`/games/${gameId}?error=${encodeURIComponent(result.error)}`);
+  }
+
   revalidatePath(`/games/${gameId}`);
+}
+
+/**
+ * Server-side auto-advance: finds every in-progress, non-paused game whose
+ * active phase has passed its scheduled `ends_at` and advances it. Driven by the
+ * Supabase pg_cron route (`/api/cron/advance-phases`) so games keep moving even when
+ * every player's phone is locked and their PWA is suspended.
+ *
+ * Runs with the service-role client (bypasses RLS) since there is no logged-in
+ * host during a cron tick. Each game advances at most one phase per call; the
+ * newly opened phase's `ends_at` is in the future, so a game is only advanced
+ * again on a later tick.
+ */
+export async function autoAdvanceExpiredPhases(): Promise<{
+  scanned: number;
+  advanced: number;
+  ended: number;
+  errors: number;
+}> {
+  const admin = createAdminClient();
+  const nowIso = new Date().toISOString();
+
+  const { data: rows, error } = await admin
+    .from("game_phases")
+    .select("game_id, ends_at, game:games!inner(status, is_paused)")
+    .eq("status", "active")
+    .not("ends_at", "is", null)
+    .lte("ends_at", nowIso)
+    .eq("game.status", "in_progress")
+    .eq("game.is_paused", false);
+
+  if (error || !rows) {
+    return { scanned: 0, advanced: 0, ended: 0, errors: error ? 1 : 0 };
+  }
+
+  // De-dupe defensively in case a game somehow has more than one active phase.
+  const gameIds = Array.from(new Set(rows.map((r) => r.game_id)));
+
+  let advanced = 0;
+  let ended = 0;
+  let errors = 0;
+  for (const gameId of gameIds) {
+    try {
+      const result = await transitionPhase(admin as unknown as DbClient, gameId);
+      if (result.error) errors++;
+      else if (result.ended) ended++;
+      else advanced++;
+    } catch {
+      errors++;
+    }
+  }
+
+  return { scanned: gameIds.length, advanced, ended, errors };
 }
 
 export async function submitNightAction(
@@ -1106,6 +1189,12 @@ async function processVoting(
         title: "You were voted out",
         body: "The town voted to eliminate you.",
       });
+      await sendPushToUsers([uid], {
+        title: "You were voted out",
+        body: "The town voted to eliminate you.",
+        url: `/games/${gameId}`,
+        tag: `${gameId}:eliminated`,
+      }).catch(() => {});
     }
 
     // Tell everyone else who the town voted out.
@@ -1322,6 +1411,12 @@ async function processNight(
         title: "You were eliminated",
         body: "You did not survive the night.",
       });
+      await sendPushToUsers([uid], {
+        title: "You were eliminated",
+        body: "You did not survive the night.",
+        url: `/games/${gameId}`,
+        tag: `${gameId}:eliminated`,
+      }).catch(() => {});
     }
 
     // Announce the overnight death to everyone else.
@@ -1369,13 +1464,20 @@ async function processNight(
       const detectiveUid = userByPlayer.get(a.actor_id);
       if (detectiveUid) {
         const targetName = nameByPlayer.get(a.target_id) ?? "Your target";
+        const investigationBody = `${targetName} is ${suspicious ? "suspicious" : "not suspicious"}.`;
         await supabase.from("notifications").insert({
           user_id: detectiveUid,
           game_id: gameId,
           type: "investigation",
           title: "Investigation result",
-          body: `${targetName} is ${suspicious ? "suspicious" : "not suspicious"}.`,
+          body: investigationBody,
         });
+        await sendPushToUsers([detectiveUid], {
+          title: "Investigation result",
+          body: investigationBody,
+          url: `/games/${gameId}`,
+          tag: `${gameId}:investigation`,
+        }).catch(() => {});
       }
     }
   }

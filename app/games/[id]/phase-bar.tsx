@@ -129,6 +129,22 @@ export function PhaseBar({
     };
   }, [supabase, gameId, refresh]);
 
+  // Resync when the app returns to the foreground. iOS suspends JS (and drops
+  // the realtime socket) while a Home Screen PWA is backgrounded or the phone
+  // is locked, so on resume we re-fetch the active phase instead of waiting for
+  // a manual refresh.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [refresh]);
+
   if (!phase) {
     return null;
   }

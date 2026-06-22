@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -15,6 +15,22 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Mafia",
   description: "The classic game of deception, online.",
+  applicationName: "Mafia",
+  // Makes the Home Screen PWA run standalone on iOS, which is required for
+  // Web Push to be delivered (iOS 16.4+).
+  appleWebApp: {
+    capable: true,
+    title: "Mafia",
+    statusBarStyle: "black-translucent",
+  },
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0a0a0a",
 };
 
 export default function RootLayout({
