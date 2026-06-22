@@ -7,11 +7,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Vercel Cron entrypoint that advances any game whose active phase has expired.
+ * HTTP entrypoint that advances any game whose active phase has expired.
  *
- * Vercel sends `Authorization: Bearer <CRON_SECRET>` when `CRON_SECRET` is set
- * in the project env, which is how we reject arbitrary public callers. The
- * schedule lives in `vercel.json`.
+ * Invoked every minute by Supabase pg_cron + pg_net (see migration
+ * `phase_advance_pg_cron`). The scheduler POSTs here with
+ * `Authorization: Bearer <CRON_SECRET>`, which must match the `cron_secret`
+ * value stored in Supabase Vault and `CRON_SECRET` in Vercel.
  */
 async function handle(request: Request): Promise<Response> {
   const secret = process.env.CRON_SECRET;

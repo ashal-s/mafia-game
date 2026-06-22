@@ -833,7 +833,7 @@ export async function advancePhase(formData: FormData): Promise<void> {
 /**
  * Server-side auto-advance: finds every in-progress, non-paused game whose
  * active phase has passed its scheduled `ends_at` and advances it. Driven by the
- * Vercel Cron route (`/api/cron/advance-phases`) so games keep moving even when
+ * Supabase pg_cron route (`/api/cron/advance-phases`) so games keep moving even when
  * every player's phone is locked and their PWA is suspended.
  *
  * Runs with the service-role client (bypasses RLS) since there is no logged-in
