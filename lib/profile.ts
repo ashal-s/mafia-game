@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/supabase/env";
 
 export type Profile = {
   id: string;
@@ -14,6 +15,10 @@ export type Profile = {
  * no valid session. Uses `getUser()` for a server-confirmed identity.
  */
 export async function getCurrentUserWithProfile() {
+  if (!getSupabaseUrl() || !getSupabaseAnonKey()) {
+    return { user: null, profile: null };
+  }
+
   const supabase = await createClient();
 
   const {
