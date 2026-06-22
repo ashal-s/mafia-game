@@ -13,6 +13,7 @@ import {
 import type { NightActionProps } from "./night-actions";
 import type { VoteActionProps } from "./vote-actions";
 import type { ChatRoomInfo } from "./chat";
+import type { HostPlayer } from "./host-dashboard";
 import { GameOver } from "./game-over";
 import {
   DEFAULT_HEALER_SELF_HEALS,
@@ -65,7 +66,7 @@ export default async function GamePage({
   const { data: game } = await supabase
     .from("games")
     .select(
-      "id, code, name, status, min_players, max_players, host_id, settings, winner_alignment",
+      "id, code, name, status, min_players, max_players, host_id, settings, winner_alignment, is_paused",
     )
     .eq("id", id)
     .maybeSingle();
@@ -214,7 +215,7 @@ export default async function GamePage({
     const { data: allPlayers } = await supabase
       .from("game_players")
       .select(
-        "id, user_id, status, seat, is_host, is_muted, profile:profiles!game_players_user_id_fkey(username, display_name)",
+        "id, user_id, status, seat, is_host, is_muted, is_ready, profile:profiles!game_players_user_id_fkey(username, display_name)",
       )
       .eq("game_id", id)
       .order("seat", { ascending: true });
@@ -232,6 +233,30 @@ export default async function GamePage({
       isHost: p.is_host,
       muted: p.is_muted,
     }));
+
+    // Host dashboard: full per-player view (role, alignment, live status). Only
+    // built for the host — RLS already exposes every role to them.
+    const roleByPlayerId = new Map(
+      (roleRows ?? []).map((r) => [r.player_id, r]),
+    );
+    const hostPlayers: HostPlayer[] = isHost
+      ? (allPlayers ?? []).map((p) => {
+          const rr = roleByPlayerId.get(p.id);
+          const roleKey = firstOf(rr?.role)?.key ?? null;
+          const alignment = (rr?.alignment ?? "town") as HostPlayer["alignment"];
+          return {
+            id: p.id,
+            name: profileName(p.profile),
+            roleName: firstOf(rr?.role)?.name ?? "—",
+            alignment,
+            alive: p.status === "alive",
+            isHost: p.is_host,
+            muted: p.is_muted,
+            ready: p.is_ready,
+            actsAtNight: Boolean(nightActionForRole(roleKey, alignment)),
+          };
+        })
+      : [];
 
     // Chat: list readable rooms (RLS already filters to ones the player may see)
     // and compute whether the player may post in each.
@@ -389,6 +414,8 @@ export default async function GamePage({
         currentUserId={user.id}
         roleConfig={roleConfig}
         phase={phase ?? null}
+        isPaused={game.is_paused}
+        hostPlayers={hostPlayers}
         night={night}
         voting={voting}
         results={results}

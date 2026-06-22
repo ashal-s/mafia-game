@@ -325,6 +325,7 @@ export type Database = {
           ended_at: string | null
           host_id: string
           id: string
+          is_paused: boolean
           max_players: number
           min_players: number
           name: string | null
@@ -342,6 +343,7 @@ export type Database = {
           ended_at?: string | null
           host_id: string
           id?: string
+          is_paused?: boolean
           max_players?: number
           min_players?: number
           name?: string | null
@@ -361,6 +363,7 @@ export type Database = {
           ended_at?: string | null
           host_id?: string
           id?: string
+          is_paused?: boolean
           max_players?: number
           min_players?: number
           name?: string | null
