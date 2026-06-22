@@ -4,6 +4,7 @@ import { NightActions, type NightActionProps } from "./night-actions";
 import { VoteActions, type VoteActionProps } from "./vote-actions";
 import { Chat, type ChatProps } from "./chat";
 import { NotificationsBell } from "./notifications-bell";
+import { NotificationOptIn } from "./notification-opt-in";
 import { HostDashboard, type HostPlayer } from "./host-dashboard";
 import { toggleMute } from "@/app/games/actions";
 import {
@@ -161,6 +162,7 @@ export function RoleReveal({
           <span className="hidden text-xs font-medium uppercase tracking-widest text-zinc-500 sm:inline">
             {gameName || "Mafia game"}
           </span>
+          <NotificationOptIn />
           <NotificationsBell userId={currentUserId} gameId={gameId} />
         </div>
       </header>

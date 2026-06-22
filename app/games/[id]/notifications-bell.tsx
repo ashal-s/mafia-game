@@ -46,6 +46,16 @@ export function NotificationsBell({
 
   const unread = items.filter((n) => !n.read).length;
 
+  const loadNotifications = useCallback(async () => {
+    const { data } = await supabase
+      .from("notifications")
+      .select("id, type, title, body, read, created_at")
+      .eq("game_id", gameId)
+      .order("created_at", { ascending: false })
+      .limit(30);
+    if (data) setItems(data as NotificationRow[]);
+  }, [supabase, gameId]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -93,6 +103,20 @@ export function NotificationsBell({
       void supabase.removeChannel(channel);
     };
   }, [supabase, userId, gameId]);
+
+  // Re-pull notifications when the app returns to the foreground, since the
+  // realtime socket is dropped while a PWA is backgrounded / the phone is locked.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void loadNotifications();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [loadNotifications]);
 
   // Close the panel when clicking outside it.
   useEffect(() => {
