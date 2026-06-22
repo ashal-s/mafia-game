@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/supabase/env";
 
 /**
  * Routes that an unauthenticated visitor is allowed to reach. Everything else
@@ -10,39 +11,51 @@ const PUBLIC_ROUTES = ["/", "/login", "/signup"];
 function isPublicRoute(pathname: string) {
   if (PUBLIC_ROUTES.includes(pathname)) return true;
   // Auth callback/confirm endpoints must stay reachable while logged out.
-  return pathname.startsWith("/auth");
+  if (pathname.startsWith("/auth")) return true;
+  // Invite links must work before the visitor has an account.
+  if (pathname.startsWith("/join/")) return true;
+  return false;
 }
 
 /**
  * Refreshes the Supabase auth session on every request and guards protected
  * routes. Called from the Next.js 16 `proxy` (formerly middleware).
- *
- * Do not run logic between creating the client and calling `getClaims()` —
- * doing so can make sessions hard to debug. See the Supabase SSR guide.
  */
 export async function updateSession(request: NextRequest) {
+  const supabaseUrl = getSupabaseUrl();
+  const supabaseAnonKey = getSupabaseAnonKey();
+
+  // Without Supabase config the proxy cannot refresh sessions. Allow public
+  // pages through so deploys missing env vars don't 500 the marketing site.
+  if (!supabaseUrl || !supabaseAnonKey) {
+    const { pathname } = request.nextUrl;
+    if (isPublicRoute(pathname)) {
+      return NextResponse.next({ request });
+    }
+    return new NextResponse(
+      "Server misconfiguration: Supabase environment variables are not set.",
+      { status: 503 },
+    );
+  }
+
   let supabaseResponse = NextResponse.next({ request });
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value),
-          );
-          supabaseResponse = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options),
-          );
-        },
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value }) =>
+          request.cookies.set(name, value),
+        );
+        supabaseResponse = NextResponse.next({ request });
+        cookiesToSet.forEach(({ name, value, options }) =>
+          supabaseResponse.cookies.set(name, value, options),
+        );
       },
     },
-  );
+  });
 
   const { data } = await supabase.auth.getClaims();
   const claims = data?.claims;
