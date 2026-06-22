@@ -259,6 +259,7 @@ export type Database = {
           game_id: string
           id: string
           is_host: boolean
+          is_muted: boolean
           is_ready: boolean
           joined_at: string
           role_id: string | null
@@ -271,6 +272,7 @@ export type Database = {
           game_id: string
           id?: string
           is_host?: boolean
+          is_muted?: boolean
           is_ready?: boolean
           joined_at?: string
           role_id?: string | null
@@ -283,6 +285,7 @@ export type Database = {
           game_id?: string
           id?: string
           is_host?: boolean
+          is_muted?: boolean
           is_ready?: boolean
           joined_at?: string
           role_id?: string | null

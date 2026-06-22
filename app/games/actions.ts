@@ -502,7 +502,7 @@ export async function startGame(formData: FormData): Promise<void> {
     ),
   );
 
-  // Create the town and mafia chat rooms once.
+  // Create the town, mafia, and dead chat rooms once.
   const { count: roomCount } = await supabase
     .from("chat_rooms")
     .select("id", { count: "exact", head: true })
@@ -511,6 +511,7 @@ export async function startGame(formData: FormData): Promise<void> {
     await supabase.from("chat_rooms").insert([
       { game_id: gameId, type: "town", name: "Town Square" },
       { game_id: gameId, type: "mafia", name: "Mafia" },
+      { game_id: gameId, type: "dead", name: "Graveyard" },
     ]);
   }
 
@@ -1239,4 +1240,99 @@ export async function leaveGame(formData: FormData): Promise<void> {
   }
 
   redirect("/dashboard");
+}
+
+const MAX_CHAT_LENGTH = 500;
+
+/**
+ * Sends a chat message to a room. Room access (which player may post where, and
+ * the mute/dead restrictions) is enforced by RLS via `private.can_post_chat_room`,
+ * so a rejected insert means the player isn't allowed to post in that room.
+ */
+export async function sendChatMessage(
+  _prevState: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const { supabase, user } = await requirePlayer();
+
+  const gameId = formData.get("game_id");
+  const roomId = formData.get("room_id");
+  const rawBody = formData.get("body");
+  if (
+    typeof gameId !== "string" ||
+    !gameId ||
+    typeof roomId !== "string" ||
+    !roomId
+  ) {
+    return { error: "Missing chat room." };
+  }
+
+  const body = typeof rawBody === "string" ? rawBody.trim() : "";
+  if (!body) return { error: "Type a message first." };
+  if (body.length > MAX_CHAT_LENGTH) {
+    return { error: `Messages are limited to ${MAX_CHAT_LENGTH} characters.` };
+  }
+
+  const { data: me } = await supabase
+    .from("game_players")
+    .select("id")
+    .eq("game_id", gameId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!me) return { error: "You are not in this game." };
+
+  const { error } = await supabase.from("chat_messages").insert({
+    game_id: gameId,
+    room_id: roomId,
+    sender_id: me.id,
+    body,
+  });
+
+  // RLS blocks posting when muted, dead (in a living room), or in a room the
+  // player can't access — surface a friendly message instead of the raw error.
+  if (error) {
+    return { error: "You can't send messages in this chat." };
+  }
+
+  return {};
+}
+
+/**
+ * Host moderation: mute or unmute a player so they can read chat but not post.
+ * RLS lets the host update players in their own game; the host's own row is
+ * never muted.
+ */
+export async function toggleMute(formData: FormData): Promise<void> {
+  const { supabase, user } = await requirePlayer();
+
+  const gameId = formData.get("game_id");
+  const playerId = formData.get("player_id");
+  if (typeof gameId !== "string" || typeof playerId !== "string") return;
+
+  const mute = formData.get("mute") === "true";
+
+  const { data: game } = await supabase
+    .from("games")
+    .select("host_id")
+    .eq("id", gameId)
+    .maybeSingle();
+  if (!game || game.host_id !== user.id) {
+    redirect(`/games/${gameId}`);
+  }
+
+  await supabase
+    .from("game_players")
+    .update({ is_muted: mute })
+    .eq("id", playerId)
+    .eq("game_id", gameId)
+    .eq("is_host", false);
+
+  await supabase.from("host_actions").insert({
+    game_id: gameId,
+    host_id: user.id,
+    action_type: mute ? "mute_player" : "unmute_player",
+    target_player_id: playerId,
+  });
+
+  revalidatePath(`/games/${gameId}`);
 }
