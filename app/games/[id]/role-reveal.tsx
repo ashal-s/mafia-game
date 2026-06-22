@@ -2,6 +2,8 @@ import Link from "next/link";
 import { PhaseBar, type PhaseRow } from "./phase-bar";
 import { NightActions, type NightActionProps } from "./night-actions";
 import { VoteActions, type VoteActionProps } from "./vote-actions";
+import { Chat, type ChatProps } from "./chat";
+import { toggleMute } from "@/app/games/actions";
 import {
   DEFAULT_HEALER_SELF_HEALS,
   DEFAULT_SNIPER_BULLETS,
@@ -18,6 +20,8 @@ export type RosterEntry = {
   alive: boolean;
   seat: number | null;
   isSelf: boolean;
+  isHost: boolean;
+  muted: boolean;
 };
 
 export type RoundResults = {
@@ -102,6 +106,7 @@ export function RoleReveal({
   results,
   roster,
   investigation,
+  chat,
 }: {
   gameId: string;
   gameName: string | null;
@@ -115,6 +120,7 @@ export function RoleReveal({
   results?: RoundResults;
   roster?: RosterEntry[];
   investigation?: Investigation;
+  chat?: ChatProps | null;
 }) {
   const self = rows.find((r) => r.user_id === currentUserId);
   const selfRole = self ? one(self.role) : null;
@@ -260,6 +266,8 @@ export function RoleReveal({
           </section>
         ) : null}
 
+        {chat ? <Chat {...chat} /> : null}
+
         {roster && roster.length > 0 ? (
           <section className="mt-6">
             <h2 className="text-sm font-semibold text-zinc-200">
@@ -292,15 +300,39 @@ export function RoleReveal({
                       </span>
                     ) : null}
                   </span>
-                  <span
-                    className={`rounded-full border px-2 py-0.5 text-xs font-medium ${
-                      p.alive
-                        ? "border-emerald-700/50 bg-emerald-950/30 text-emerald-300"
-                        : "border-zinc-700 bg-zinc-900 text-zinc-500"
-                    }`}
-                  >
-                    {p.alive ? "Alive" : "Dead"}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {p.muted ? (
+                      <span className="rounded-full border border-amber-700/50 bg-amber-950/30 px-2 py-0.5 text-xs font-medium text-amber-300">
+                        Muted
+                      </span>
+                    ) : null}
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-xs font-medium ${
+                        p.alive
+                          ? "border-emerald-700/50 bg-emerald-950/30 text-emerald-300"
+                          : "border-zinc-700 bg-zinc-900 text-zinc-500"
+                      }`}
+                    >
+                      {p.alive ? "Alive" : "Dead"}
+                    </span>
+                    {isHost && !p.isHost ? (
+                      <form action={toggleMute}>
+                        <input type="hidden" name="game_id" value={gameId} />
+                        <input type="hidden" name="player_id" value={p.id} />
+                        <input
+                          type="hidden"
+                          name="mute"
+                          value={p.muted ? "false" : "true"}
+                        />
+                        <button
+                          type="submit"
+                          className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-amber-700 hover:text-amber-300"
+                        >
+                          {p.muted ? "Unmute" : "Mute"}
+                        </button>
+                      </form>
+                    ) : null}
+                  </div>
                 </li>
               ))}
             </ul>

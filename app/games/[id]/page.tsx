@@ -12,6 +12,7 @@ import {
 } from "./role-reveal";
 import type { NightActionProps } from "./night-actions";
 import type { VoteActionProps } from "./vote-actions";
+import type { ChatRoomInfo } from "./chat";
 import { GameOver } from "./game-over";
 import {
   DEFAULT_HEALER_SELF_HEALS,
@@ -213,7 +214,7 @@ export default async function GamePage({
     const { data: allPlayers } = await supabase
       .from("game_players")
       .select(
-        "id, user_id, status, seat, profile:profiles!game_players_user_id_fkey(username, display_name)",
+        "id, user_id, status, seat, is_host, is_muted, profile:profiles!game_players_user_id_fkey(username, display_name)",
       )
       .eq("game_id", id)
       .order("seat", { ascending: true });
@@ -228,7 +229,67 @@ export default async function GamePage({
       alive: p.status === "alive",
       seat: p.seat,
       isSelf: p.id === selfPlayerId,
+      isHost: p.is_host,
+      muted: p.is_muted,
     }));
+
+    // Chat: list readable rooms (RLS already filters to ones the player may see)
+    // and compute whether the player may post in each.
+    const selfPlayer = (allPlayers ?? []).find((p) => p.id === selfPlayerId);
+    const selfStatus = selfPlayer?.status ?? null;
+    const selfMuted = Boolean(selfPlayer?.is_muted);
+    const selfIsMafia = selfRow?.alignment === "mafia";
+
+    const namesById: Record<string, string> = {};
+    for (const p of allPlayers ?? []) {
+      namesById[p.id] = profileName(p.profile);
+    }
+
+    const { data: chatRoomRows } = await supabase
+      .from("chat_rooms")
+      .select("id, type, name")
+      .eq("game_id", id);
+
+    const ROOM_RANK: Record<string, number> = {
+      town: 0,
+      mafia: 1,
+      dead: 2,
+      system: 3,
+    };
+
+    const chatRooms: ChatRoomInfo[] = (chatRoomRows ?? [])
+      .slice()
+      .sort((a, b) => (ROOM_RANK[a.type] ?? 9) - (ROOM_RANK[b.type] ?? 9))
+      .map((r) => {
+        let canWrite = false;
+        let writeHint: string | null = null;
+        if (r.type === "town") {
+          canWrite = selfStatus === "alive";
+          if (!canWrite && selfStatus === "dead") {
+            writeHint = "Dead players can read the town chat but can't post.";
+          }
+        } else if (r.type === "mafia") {
+          canWrite = selfStatus === "alive" && selfIsMafia;
+          if (!canWrite) {
+            writeHint =
+              selfIsMafia && selfStatus === "dead"
+                ? "Dead mafia can read the mafia chat but can't post."
+                : "You're viewing the mafia chat for moderation.";
+          }
+        } else if (r.type === "dead") {
+          canWrite = selfStatus === "dead";
+          if (!canWrite) {
+            writeHint = "You're viewing the graveyard for moderation.";
+          }
+        }
+        return {
+          id: r.id,
+          type: r.type as ChatRoomInfo["type"],
+          name: r.name,
+          canWrite,
+          writeHint,
+        };
+      });
 
     // Voting UI: alive players vote, the dead and observers see the live tally.
     let voting: VoteActionProps | null = null;
@@ -333,6 +394,13 @@ export default async function GamePage({
         results={results}
         roster={roster}
         investigation={investigation}
+        chat={{
+          gameId: game.id,
+          selfPlayerId,
+          initialMuted: selfMuted,
+          rooms: chatRooms,
+          namesById,
+        }}
       />
     );
   }
