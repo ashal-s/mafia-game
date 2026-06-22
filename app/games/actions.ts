@@ -9,6 +9,7 @@ import {
   DEFAULT_SNIPER_BULLETS,
   nightActionForRole,
 } from "@/lib/night";
+import { evaluateWin, type WinAlignment } from "@/lib/win";
 
 export type FormState = { error?: string };
 
@@ -607,10 +608,24 @@ export async function advancePhase(formData: FormData): Promise<void> {
     now.getTime() + PHASE_DURATIONS_SECONDS[nextType] * 1000,
   );
 
-  // Leaving the night: resolve all submitted night actions before the phase
-  // transitions, applying kills, protection, and private investigation results.
-  if (currentType === "night" && current) {
+  // Resolve the phase being left before it transitions:
+  //  * night  → apply kills, protection, and private investigation results.
+  //  * voting  → tally the day vote and eliminate the chosen player (if any).
+  if (current && currentType === "night") {
     await processNight(supabase, gameId, current.id, currentDay);
+  } else if (current && currentType === "voting") {
+    await processVoting(supabase, gameId, current.id, currentDay);
+  }
+
+  // A win can be reached after night kills or after a day elimination. When it
+  // is, end the game here instead of opening the next phase.
+  if (current && (currentType === "night" || currentType === "voting")) {
+    const winner = await evaluateGameWinner(supabase, gameId);
+    if (winner) {
+      await endGame(supabase, gameId, current.id, winner);
+      revalidatePath(`/games/${gameId}`);
+      return;
+    }
   }
 
   if (current) {
@@ -793,6 +808,253 @@ export async function submitNightAction(
 
   revalidatePath(`/games/${gameId}`);
   return {};
+}
+
+/**
+ * Casts (or updates) the current player's day vote. A living player may vote for
+ * any living player, or abstain, and may change that choice until the voting
+ * phase closes. One vote per player per phase is enforced by the
+ * `(phase_id, voter_id)` unique constraint via upsert.
+ */
+export async function submitVote(
+  _prevState: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const { supabase, user } = await requirePlayer();
+
+  const gameId = formData.get("game_id");
+  const rawTarget = formData.get("target_id");
+  if (typeof gameId !== "string" || !gameId) {
+    return { error: "Missing game." };
+  }
+
+  const { data: game } = await supabase
+    .from("games")
+    .select("id, status")
+    .eq("id", gameId)
+    .maybeSingle();
+  if (!game || game.status !== "in_progress") {
+    return { error: "This game is not in progress." };
+  }
+
+  // The active phase must be voting.
+  const { data: phase } = await supabase
+    .from("game_phases")
+    .select("id, phase_type, status")
+    .eq("game_id", gameId)
+    .eq("status", "active")
+    .order("phase_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!phase || phase.phase_type !== "voting") {
+    return { error: "You can only vote during the voting phase." };
+  }
+
+  // The voter must be a living member of this game.
+  const { data: me } = await supabase
+    .from("game_players")
+    .select("id, status")
+    .eq("game_id", gameId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!me) return { error: "You are not in this game." };
+  if (me.status !== "alive") return { error: "Dead players cannot vote." };
+
+  // "abstain" / empty selection means a null target (no one).
+  const targetId =
+    typeof rawTarget === "string" && rawTarget && rawTarget !== "abstain"
+      ? rawTarget
+      : null;
+
+  if (targetId) {
+    const { data: target } = await supabase
+      .from("game_players")
+      .select("id, status")
+      .eq("id", targetId)
+      .eq("game_id", gameId)
+      .maybeSingle();
+    if (!target || target.status !== "alive") {
+      return { error: "You can only vote for a living player." };
+    }
+  }
+
+  const { error } = await supabase.from("votes").upsert(
+    {
+      game_id: gameId,
+      phase_id: phase.id,
+      voter_id: me.id,
+      target_id: targetId,
+    },
+    { onConflict: "phase_id,voter_id" },
+  );
+
+  if (error) return { error: error.message };
+
+  revalidatePath(`/games/${gameId}`);
+  return {};
+}
+
+/**
+ * Tallies the day vote for a voting phase and eliminates the player with the
+ * most votes. Only votes cast by living players for living targets count, and a
+ * tie (or no votes) eliminates no one. Writes a notification for the eliminated
+ * player and a `voting_resolved` event with the full tally. Runs as the host
+ * (the only caller is `advancePhase`, which verifies host + running game).
+ */
+async function processVoting(
+  supabase: DbClient,
+  gameId: string,
+  phaseId: string,
+  dayNumber: number,
+): Promise<void> {
+  const { data: players } = await supabase
+    .from("game_players")
+    .select("id, user_id, status")
+    .eq("game_id", gameId);
+
+  const aliveIds = new Set(
+    (players ?? []).filter((p) => p.status === "alive").map((p) => p.id),
+  );
+  const userByPlayer = new Map(
+    (players ?? []).map((p) => [p.id, p.user_id]),
+  );
+
+  const { data: votes } = await supabase
+    .from("votes")
+    .select("voter_id, target_id")
+    .eq("phase_id", phaseId);
+
+  // Tally one vote per living voter for living targets (abstains are ignored).
+  const tally = new Map<string, number>();
+  for (const v of votes ?? []) {
+    if (
+      v.target_id &&
+      aliveIds.has(v.voter_id) &&
+      aliveIds.has(v.target_id)
+    ) {
+      tally.set(v.target_id, (tally.get(v.target_id) ?? 0) + 1);
+    }
+  }
+
+  // Find the highest-voted target; a draw for the top spot eliminates no one.
+  let eliminated: string | null = null;
+  let topCount = 0;
+  let tie = false;
+  for (const [target, count] of tally) {
+    if (count > topCount) {
+      topCount = count;
+      eliminated = target;
+      tie = false;
+    } else if (count === topCount) {
+      tie = true;
+    }
+  }
+  if (tie || topCount === 0) eliminated = null;
+
+  const now = new Date().toISOString();
+
+  if (eliminated) {
+    await supabase
+      .from("game_players")
+      .update({ status: "dead", eliminated_at: now })
+      .eq("id", eliminated)
+      .eq("game_id", gameId);
+
+    const uid = userByPlayer.get(eliminated);
+    if (uid) {
+      await supabase.from("notifications").insert({
+        user_id: uid,
+        game_id: gameId,
+        type: "eliminated",
+        title: "You were voted out",
+        body: "The town voted to eliminate you.",
+      });
+    }
+
+    await supabase.from("game_events").insert({
+      game_id: gameId,
+      phase_id: phaseId,
+      actor_id: eliminated,
+      event_type: "player_eliminated",
+      data: { player_id: eliminated, cause: "vote", day_number: dayNumber },
+    });
+  }
+
+  await supabase.from("game_events").insert({
+    game_id: gameId,
+    phase_id: phaseId,
+    event_type: "voting_resolved",
+    data: {
+      day_number: dayNumber,
+      eliminated,
+      tie: tie && topCount > 0,
+      tally: Object.fromEntries(tally),
+    },
+  });
+}
+
+/**
+ * Counts the living players by alignment and returns the winning alignment, or
+ * `null` if the game continues. Reads secret alignments, so it must run as the
+ * host (RLS allows the host to read every role in their game).
+ */
+async function evaluateGameWinner(
+  supabase: DbClient,
+  gameId: string,
+): Promise<WinAlignment | null> {
+  const [{ data: players }, { data: roleRows }] = await Promise.all([
+    supabase.from("game_players").select("id, status").eq("game_id", gameId),
+    supabase
+      .from("game_player_roles")
+      .select("player_id, alignment")
+      .eq("game_id", gameId),
+  ]);
+
+  const alignmentByPlayer = new Map(
+    (roleRows ?? []).map((r) => [r.player_id, r.alignment as string]),
+  );
+  const aliveAlignments = (players ?? [])
+    .filter((p) => p.status === "alive")
+    .map((p) => alignmentByPlayer.get(p.id) ?? "town");
+
+  return evaluateWin(aliveAlignments);
+}
+
+/**
+ * Ends a game: closes the final phase, stamps the winner and completion time on
+ * the game, and logs a `game_ended` event. Updating the phase to `completed`
+ * (which is on the realtime publication) nudges every client to refresh onto the
+ * game-over screen.
+ */
+async function endGame(
+  supabase: DbClient,
+  gameId: string,
+  finalPhaseId: string,
+  winner: WinAlignment,
+): Promise<void> {
+  const now = new Date().toISOString();
+
+  await supabase
+    .from("game_phases")
+    .update({ status: "completed", ended_at: now })
+    .eq("id", finalPhaseId);
+
+  await supabase
+    .from("games")
+    .update({
+      status: "completed",
+      winner_alignment: winner,
+      ended_at: now,
+      current_phase_id: null,
+    })
+    .eq("id", gameId);
+
+  await supabase.from("game_events").insert({
+    game_id: gameId,
+    phase_id: finalPhaseId,
+    event_type: "game_ended",
+    data: { winner_alignment: winner },
+  });
 }
 
 /**
