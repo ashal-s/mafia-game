@@ -15,7 +15,7 @@ export default async function ProfileSetupPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-zinc-950 px-4 py-16 text-zinc-100">
+    <div className="flex flex-1 flex-col items-center justify-center bg-transparent px-4 py-16 text-zinc-100">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <span className="text-3xl font-bold tracking-tight text-red-500">

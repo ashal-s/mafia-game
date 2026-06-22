@@ -249,7 +249,7 @@ export default async function GamePage({
 
   // completed or cancelled
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-zinc-950 px-6 py-12 text-zinc-100">
+    <div className="flex flex-1 flex-col items-center justify-center bg-transparent px-6 py-12 text-zinc-100">
       <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
         <h1 className="text-lg font-semibold text-zinc-50">
           {game.status === "cancelled" ? "Game cancelled" : "Game over"}

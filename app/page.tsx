@@ -11,7 +11,7 @@ export default async function Home() {
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-zinc-950 px-4 text-center text-zinc-100">
+    <div className="flex flex-1 flex-col items-center justify-center bg-transparent px-4 text-center text-zinc-100">
       <main className="flex max-w-xl flex-col items-center gap-6">
         <span className="text-5xl font-bold tracking-tight text-red-500">
           Mafia

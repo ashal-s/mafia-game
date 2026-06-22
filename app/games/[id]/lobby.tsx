@@ -182,7 +182,7 @@ export function Lobby({
   }
 
   return (
-    <div className="flex flex-1 flex-col bg-zinc-950 text-zinc-100">
+    <div className="flex flex-1 flex-col bg-transparent text-zinc-100">
       <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
         <Link href="/dashboard" className="text-lg font-bold tracking-tight text-red-500">
           Mafia
@@ -356,7 +356,7 @@ export function Lobby({
 
 function CenteredCard({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-zinc-950 px-6 py-12 text-zinc-100">
+    <div className="flex flex-1 flex-col items-center justify-center bg-transparent px-6 py-12 text-zinc-100">
       <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
         {children}
       </div>
