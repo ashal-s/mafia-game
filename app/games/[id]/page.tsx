@@ -7,8 +7,12 @@ import {
   RoleReveal,
   type RoleConfig,
   type Investigation,
+  type RosterEntry,
+  type RoundResults,
 } from "./role-reveal";
 import type { NightActionProps } from "./night-actions";
+import type { VoteActionProps } from "./vote-actions";
+import { GameOver } from "./game-over";
 import {
   DEFAULT_HEALER_SELF_HEALS,
   DEFAULT_SNIPER_BULLETS,
@@ -59,7 +63,9 @@ export default async function GamePage({
 
   const { data: game } = await supabase
     .from("games")
-    .select("id, code, name, status, min_players, max_players, host_id, settings")
+    .select(
+      "id, code, name, status, min_players, max_players, host_id, settings, winner_alignment",
+    )
     .eq("id", id)
     .maybeSingle();
 
@@ -145,6 +151,7 @@ export default async function GamePage({
           .maybeSingle();
 
         let limit: { label: string; remaining: number | null } | null = null;
+        let disableSelf = false;
         if (descriptor.type === "sniper_shoot") {
           const configured = roleConfig?.sniper?.bullets;
           const max =
@@ -177,10 +184,10 @@ export default async function GamePage({
               .eq("action_type", "heal")
               .eq("target_id", selfPlayerId)
               .neq("phase_id", phase.id);
-            limit = {
-              label: "Self-heals",
-              remaining: Math.max(0, max - (count ?? 0)),
-            };
+            const remaining = Math.max(0, max - (count ?? 0));
+            limit = { label: "Self-heals", remaining };
+            // Out of self-heals: keep the action, just remove the self option.
+            disableSelf = remaining === 0;
           }
         }
 
@@ -197,8 +204,88 @@ export default async function GamePage({
           currentTargetId: myAction?.target_id ?? null,
           hasSubmitted: Boolean(myAction),
           limit,
+          disableSelf,
         };
       }
+    }
+
+    // Full roster (alive/dead), shown throughout the in-progress game.
+    const { data: allPlayers } = await supabase
+      .from("game_players")
+      .select(
+        "id, user_id, status, seat, profile:profiles!game_players_user_id_fkey(username, display_name)",
+      )
+      .eq("game_id", id)
+      .order("seat", { ascending: true });
+
+    const nameByPlayerId = new Map(
+      (allPlayers ?? []).map((p) => [p.id, profileName(p.profile)]),
+    );
+
+    const roster: RosterEntry[] = (allPlayers ?? []).map((p) => ({
+      id: p.id,
+      name: profileName(p.profile),
+      alive: p.status === "alive",
+      seat: p.seat,
+      isSelf: p.id === selfPlayerId,
+    }));
+
+    // Voting UI: alive players vote, the dead and observers see the live tally.
+    let voting: VoteActionProps | null = null;
+    if (phase?.phase_type === "voting") {
+      const alive = (allPlayers ?? []).filter((p) => p.status === "alive");
+      const { data: voteRows } = await supabase
+        .from("votes")
+        .select("voter_id, target_id")
+        .eq("phase_id", phase.id);
+
+      const myVote = selfPlayerId
+        ? (voteRows ?? []).find((v) => v.voter_id === selfPlayerId)
+        : undefined;
+      const meAlive = Boolean(
+        selfPlayerId && alive.some((p) => p.id === selfPlayerId),
+      );
+
+      voting = {
+        gameId: game.id,
+        phaseId: phase.id,
+        canVote: meAlive,
+        alivePlayers: alive.map((p) => ({
+          id: p.id,
+          name: profileName(p.profile),
+          isSelf: p.id === selfPlayerId,
+        })),
+        currentTargetId: myVote?.target_id ?? null,
+        hasVoted: Boolean(myVote),
+        initialVotes: voteRows ?? [],
+      };
+    }
+
+    // Results UI: surface the outcome of the day's vote during the results phase.
+    let results: RoundResults = null;
+    if (phase?.phase_type === "results") {
+      const { data: ev } = await supabase
+        .from("game_events")
+        .select("data")
+        .eq("game_id", id)
+        .eq("event_type", "voting_resolved")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const data = ev?.data as {
+        eliminated?: string | null;
+        tie?: boolean;
+        day_number?: number;
+      } | null;
+
+      results = {
+        eliminatedName: data?.eliminated
+          ? (nameByPlayerId.get(data.eliminated) ?? "A player")
+          : null,
+        tie: Boolean(data?.tie),
+        dayNumber: data?.day_number ?? phase.day_number,
+      };
     }
 
     // Detective's most recent private finding (shown in any phase).
@@ -242,18 +329,53 @@ export default async function GamePage({
         roleConfig={roleConfig}
         phase={phase ?? null}
         night={night}
+        voting={voting}
+        results={results}
+        roster={roster}
         investigation={investigation}
       />
     );
   }
 
-  // completed or cancelled
+  // Completed: reveal every role and the winning side.
+  if (game.status === "completed") {
+    const [{ data: roleRows }, { data: players }] = await Promise.all([
+      supabase.from("game_player_roles").select(ROLE_SELECT).eq("game_id", id),
+      supabase
+        .from("game_players")
+        .select(
+          "id, user_id, status, seat, profile:profiles!game_players_user_id_fkey(username, display_name)",
+        )
+        .eq("game_id", id)
+        .order("seat", { ascending: true }),
+    ]);
+
+    const statusByUser = new Map(
+      (players ?? []).map((p) => [p.user_id, p.status]),
+    );
+
+    const reveal = (roleRows ?? []).map((r) => ({
+      name: profileName(r.profile),
+      roleName: firstOf(r.role)?.name ?? "—",
+      alignment: r.alignment,
+      alive: statusByUser.get(r.user_id) === "alive",
+      isSelf: r.user_id === user.id,
+    }));
+
+    return (
+      <GameOver
+        gameName={game.name}
+        winner={game.winner_alignment}
+        reveal={reveal}
+      />
+    );
+  }
+
+  // Cancelled (or any other non-active status).
   return (
     <div className="flex flex-1 flex-col items-center justify-center bg-transparent px-6 py-12 text-zinc-100">
       <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
-        <h1 className="text-lg font-semibold text-zinc-50">
-          {game.status === "cancelled" ? "Game cancelled" : "Game over"}
-        </h1>
+        <h1 className="text-lg font-semibold text-zinc-50">Game cancelled</h1>
         <p className="mt-1 text-sm text-zinc-400">
           {game.name || "This game"} is no longer active.
         </p>

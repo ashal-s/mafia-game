@@ -66,6 +66,7 @@ export function Lobby({
   const [players, setPlayers] = useState<LobbyPlayer[]>(initialPlayers);
   const [origin, setOrigin] = useState("");
   const [copied, setCopied] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
 
   useEffect(() => {
     // Browser-only value; reading it after mount avoids an SSR hydration
@@ -148,6 +149,17 @@ export function Lobby({
     }
   }
 
+  async function copyCode() {
+    if (!game.code) return;
+    try {
+      await navigator.clipboard.writeText(game.code);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    } catch {
+      // Clipboard unavailable; the code is still shown to copy manually.
+    }
+  }
+
   if (game.status === "cancelled") {
     return (
       <CenteredCard>
@@ -224,6 +236,13 @@ export function Lobby({
             <span className="font-mono text-2xl tracking-[0.35em] text-red-400">
               {game.code}
             </span>
+            <button
+              type="button"
+              onClick={copyCode}
+              className="h-9 shrink-0 rounded-lg border border-zinc-700 px-3 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-100"
+            >
+              {copiedCode ? "Copied" : "Copy code"}
+            </button>
           </div>
           <div className="mt-3 flex gap-2">
             <input

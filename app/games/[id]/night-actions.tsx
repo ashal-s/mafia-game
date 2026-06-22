@@ -20,6 +20,11 @@ export type NightActionProps = {
   currentTargetId: string | null;
   hasSubmitted: boolean;
   limit?: { label: string; remaining: number | null } | null;
+  /**
+   * When true, the player may still act on others but not on themselves — used
+   * for the healer once their self-heals are exhausted.
+   */
+  disableSelf?: boolean;
 };
 
 const SKIP = "skip";
@@ -64,10 +69,12 @@ export function NightActions(props: NightActionProps) {
     currentTargetId,
     hasSubmitted,
     limit,
+    disableSelf,
   } = props;
 
   const meta = META[actionType];
-  const selectable = alivePlayers.filter((p) => allowSelf || !p.isSelf);
+  const canSelf = allowSelf && !disableSelf;
+  const selectable = alivePlayers.filter((p) => canSelf || !p.isSelf);
 
   const [state, formAction] = useActionState<FormState, FormData>(
     submitNightAction,
@@ -80,7 +87,10 @@ export function NightActions(props: NightActionProps) {
     currentTargetId ?? (optional && hasSubmitted ? SKIP : "");
   const [choice, setChoice] = useState<string>(initialChoice);
 
-  const outOfResource = limit?.remaining === 0;
+  // Only the sniper is fully blocked when out of resource — every shot spends a
+  // bullet. The healer's self-heal limit only removes the self option, so they
+  // can keep protecting others.
+  const outOfResource = actionType === "sniper_shoot" && limit?.remaining === 0;
   const submittedTarget = currentTargetId
     ? (alivePlayers.find((p) => p.id === currentTargetId)?.name ?? "a player")
     : null;
@@ -114,6 +124,13 @@ export function NightActions(props: NightActionProps) {
           {submittedTarget
             ? `Locked in: you will ${meta.verb} ${submittedTarget}. You can change this until the night ends.`
             : "Locked in: you are holding your fire. You can change this until the night ends."}
+        </p>
+      ) : null}
+
+      {disableSelf && !outOfResource ? (
+        <p className="mt-4 rounded-lg border border-amber-800/50 bg-amber-950/20 px-3 py-2 text-sm text-amber-300">
+          You&apos;re out of self-heals — you can still protect other players,
+          just not yourself.
         </p>
       ) : null}
 

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { PhaseBar, type PhaseRow } from "./phase-bar";
 import { NightActions, type NightActionProps } from "./night-actions";
+import { VoteActions, type VoteActionProps } from "./vote-actions";
 import {
   DEFAULT_HEALER_SELF_HEALS,
   DEFAULT_SNIPER_BULLETS,
@@ -9,6 +10,20 @@ import {
 export type Investigation = {
   targetName: string;
   suspicious: boolean;
+} | null;
+
+export type RosterEntry = {
+  id: string;
+  name: string;
+  alive: boolean;
+  seat: number | null;
+  isSelf: boolean;
+};
+
+export type RoundResults = {
+  eliminatedName: string | null;
+  tie: boolean;
+  dayNumber: number;
 } | null;
 
 type RoleInfo = {
@@ -83,6 +98,9 @@ export function RoleReveal({
   roleConfig,
   phase,
   night,
+  voting,
+  results,
+  roster,
   investigation,
 }: {
   gameId: string;
@@ -93,6 +111,9 @@ export function RoleReveal({
   roleConfig?: RoleConfig | null;
   phase?: PhaseRow | null;
   night?: NightActionProps | null;
+  voting?: VoteActionProps | null;
+  results?: RoundResults;
+  roster?: RosterEntry[];
   investigation?: Investigation;
 }) {
   const self = rows.find((r) => r.user_id === currentUserId);
@@ -176,6 +197,39 @@ export function RoleReveal({
 
         {night ? <NightActions {...night} /> : null}
 
+        {voting ? <VoteActions {...voting} /> : null}
+
+        {results ? (
+          <section
+            className={`mt-6 rounded-2xl border p-6 ${
+              results.eliminatedName
+                ? "border-red-800/60 bg-red-950/30"
+                : "border-emerald-800/50 bg-emerald-950/20"
+            }`}
+          >
+            <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
+              Day {results.dayNumber} results
+            </p>
+            {results.eliminatedName ? (
+              <p className="mt-2 text-sm text-zinc-200">
+                The town voted out{" "}
+                <span className="font-semibold text-zinc-50">
+                  {results.eliminatedName}
+                </span>
+                .
+              </p>
+            ) : results.tie ? (
+              <p className="mt-2 text-sm text-zinc-200">
+                The vote was tied — no one was eliminated.
+              </p>
+            ) : (
+              <p className="mt-2 text-sm text-zinc-200">
+                No one received enough votes — no one was eliminated.
+              </p>
+            )}
+          </section>
+        ) : null}
+
         {investigation ? (
           <section
             className={`mt-6 rounded-2xl border p-5 ${
@@ -203,6 +257,53 @@ export function RoleReveal({
               </span>
               .
             </p>
+          </section>
+        ) : null}
+
+        {roster && roster.length > 0 ? (
+          <section className="mt-6">
+            <h2 className="text-sm font-semibold text-zinc-200">
+              Players
+              <span className="ml-2 text-xs font-normal text-zinc-500">
+                {roster.filter((p) => p.alive).length} alive
+              </span>
+            </h2>
+            <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {roster.map((p) => (
+                <li
+                  key={p.id}
+                  className={`flex items-center justify-between rounded-xl border px-4 py-3 ${
+                    p.alive
+                      ? "border-zinc-700/60 bg-zinc-950/30"
+                      : "border-zinc-800 bg-zinc-900/40"
+                  }`}
+                >
+                  <span
+                    className={`text-sm font-medium ${
+                      p.alive
+                        ? "text-zinc-100"
+                        : "text-zinc-500 line-through"
+                    }`}
+                  >
+                    {p.name}
+                    {p.isSelf ? (
+                      <span className="ml-1 text-xs text-zinc-500 no-underline">
+                        (you)
+                      </span>
+                    ) : null}
+                  </span>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-xs font-medium ${
+                      p.alive
+                        ? "border-emerald-700/50 bg-emerald-950/30 text-emerald-300"
+                        : "border-zinc-700 bg-zinc-900 text-zinc-500"
+                    }`}
+                  >
+                    {p.alive ? "Alive" : "Dead"}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </section>
         ) : null}
 
