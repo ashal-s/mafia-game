@@ -1,6 +1,11 @@
 import Link from "next/link";
 import { PhaseBar, type PhaseRow } from "./phase-bar";
 import { NightActions, type NightActionProps } from "./night-actions";
+import { VoteActions, type VoteActionProps } from "./vote-actions";
+import { Chat, type ChatProps } from "./chat";
+import { NotificationsBell } from "./notifications-bell";
+import { HostDashboard, type HostPlayer } from "./host-dashboard";
+import { toggleMute } from "@/app/games/actions";
 import {
   DEFAULT_HEALER_SELF_HEALS,
   DEFAULT_SNIPER_BULLETS,
@@ -9,6 +14,22 @@ import {
 export type Investigation = {
   targetName: string;
   suspicious: boolean;
+} | null;
+
+export type RosterEntry = {
+  id: string;
+  name: string;
+  alive: boolean;
+  seat: number | null;
+  isSelf: boolean;
+  isHost: boolean;
+  muted: boolean;
+};
+
+export type RoundResults = {
+  eliminatedName: string | null;
+  tie: boolean;
+  dayNumber: number;
 } | null;
 
 type RoleInfo = {
@@ -82,8 +103,14 @@ export function RoleReveal({
   currentUserId,
   roleConfig,
   phase,
+  isPaused,
+  hostPlayers,
   night,
+  voting,
+  results,
+  roster,
   investigation,
+  chat,
 }: {
   gameId: string;
   gameName: string | null;
@@ -92,8 +119,14 @@ export function RoleReveal({
   currentUserId: string;
   roleConfig?: RoleConfig | null;
   phase?: PhaseRow | null;
+  isPaused?: boolean;
+  hostPlayers?: HostPlayer[];
   night?: NightActionProps | null;
+  voting?: VoteActionProps | null;
+  results?: RoundResults;
+  roster?: RosterEntry[];
   investigation?: Investigation;
+  chat?: ChatProps | null;
 }) {
   const self = rows.find((r) => r.user_id === currentUserId);
   const selfRole = self ? one(self.role) : null;
@@ -120,18 +153,33 @@ export function RoleReveal({
   );
 
   return (
-    <div className="flex flex-1 flex-col bg-zinc-950 text-zinc-100">
+    <div className="flex flex-1 flex-col bg-transparent text-zinc-100">
       <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
         <Link href="/dashboard" className="text-lg font-bold tracking-tight text-red-500">
           Mafia
         </Link>
-        <span className="text-xs font-medium uppercase tracking-widest text-zinc-500">
-          {gameName || "Mafia game"}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="hidden text-xs font-medium uppercase tracking-widest text-zinc-500 sm:inline">
+            {gameName || "Mafia game"}
+          </span>
+          <NotificationsBell userId={currentUserId} gameId={gameId} />
+        </div>
       </header>
 
       <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-10">
-        <PhaseBar gameId={gameId} isHost={isHost} initialPhase={phase ?? null} />
+        <PhaseBar
+          gameId={gameId}
+          isHost={isHost}
+          initialPhase={phase ?? null}
+          paused={Boolean(isPaused)}
+        />
+
+        {isPaused ? (
+          <div className="mt-4 rounded-xl border border-amber-800/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+            The host has paused the game. Actions and voting are disabled until it
+            resumes.
+          </div>
+        ) : null}
 
         {self && selfRole && selfStyle ? (
           <section
@@ -176,6 +224,39 @@ export function RoleReveal({
 
         {night ? <NightActions {...night} /> : null}
 
+        {voting ? <VoteActions {...voting} /> : null}
+
+        {results ? (
+          <section
+            className={`mt-6 rounded-2xl border p-6 ${
+              results.eliminatedName
+                ? "border-red-800/60 bg-red-950/30"
+                : "border-emerald-800/50 bg-emerald-950/20"
+            }`}
+          >
+            <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
+              Day {results.dayNumber} results
+            </p>
+            {results.eliminatedName ? (
+              <p className="mt-2 text-sm text-zinc-200">
+                The town voted out{" "}
+                <span className="font-semibold text-zinc-50">
+                  {results.eliminatedName}
+                </span>
+                .
+              </p>
+            ) : results.tie ? (
+              <p className="mt-2 text-sm text-zinc-200">
+                The vote was tied — no one was eliminated.
+              </p>
+            ) : (
+              <p className="mt-2 text-sm text-zinc-200">
+                No one received enough votes — no one was eliminated.
+              </p>
+            )}
+          </section>
+        ) : null}
+
         {investigation ? (
           <section
             className={`mt-6 rounded-2xl border p-5 ${
@@ -203,6 +284,79 @@ export function RoleReveal({
               </span>
               .
             </p>
+          </section>
+        ) : null}
+
+        {chat ? <Chat {...chat} /> : null}
+
+        {roster && roster.length > 0 ? (
+          <section className="mt-6">
+            <h2 className="text-sm font-semibold text-zinc-200">
+              Players
+              <span className="ml-2 text-xs font-normal text-zinc-500">
+                {roster.filter((p) => p.alive).length} alive
+              </span>
+            </h2>
+            <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {roster.map((p) => (
+                <li
+                  key={p.id}
+                  className={`flex items-center justify-between rounded-xl border px-4 py-3 ${
+                    p.alive
+                      ? "border-zinc-700/60 bg-zinc-950/30"
+                      : "border-zinc-800 bg-zinc-900/40"
+                  }`}
+                >
+                  <span
+                    className={`text-sm font-medium ${
+                      p.alive
+                        ? "text-zinc-100"
+                        : "text-zinc-500 line-through"
+                    }`}
+                  >
+                    {p.name}
+                    {p.isSelf ? (
+                      <span className="ml-1 text-xs text-zinc-500 no-underline">
+                        (you)
+                      </span>
+                    ) : null}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {p.muted ? (
+                      <span className="rounded-full border border-amber-700/50 bg-amber-950/30 px-2 py-0.5 text-xs font-medium text-amber-300">
+                        Muted
+                      </span>
+                    ) : null}
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-xs font-medium ${
+                        p.alive
+                          ? "border-emerald-700/50 bg-emerald-950/30 text-emerald-300"
+                          : "border-zinc-700 bg-zinc-900 text-zinc-500"
+                      }`}
+                    >
+                      {p.alive ? "Alive" : "Dead"}
+                    </span>
+                    {isHost && !p.isHost ? (
+                      <form action={toggleMute}>
+                        <input type="hidden" name="game_id" value={gameId} />
+                        <input type="hidden" name="player_id" value={p.id} />
+                        <input
+                          type="hidden"
+                          name="mute"
+                          value={p.muted ? "false" : "true"}
+                        />
+                        <button
+                          type="submit"
+                          className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-amber-700 hover:text-amber-300"
+                        >
+                          {p.muted ? "Unmute" : "Mute"}
+                        </button>
+                      </form>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
           </section>
         ) : null}
 
@@ -235,53 +389,14 @@ export function RoleReveal({
           </section>
         ) : null}
 
-        {isHost ? (
-          <section className="mt-8">
-            <h2 className="text-sm font-semibold text-zinc-200">
-              Host overview
-              <span className="ml-2 text-xs font-normal text-zinc-500">
-                (only you can see this)
-              </span>
-            </h2>
-            <div className="mt-3 overflow-hidden rounded-xl border border-zinc-800">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-zinc-900/80 text-xs uppercase tracking-wide text-zinc-500">
-                  <tr>
-                    <th className="px-4 py-2 font-medium">Player</th>
-                    <th className="px-4 py-2 font-medium">Role</th>
-                    <th className="px-4 py-2 font-medium">Team</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-800">
-                  {rows.map((row) => {
-                    const style = ALIGNMENT_STYLES[row.alignment];
-                    return (
-                      <tr key={row.player_id} className="bg-zinc-950/40">
-                        <td className="px-4 py-2 text-zinc-200">
-                          {nameOf(row.profile)}
-                          {row.user_id === currentUserId ? (
-                            <span className="ml-1 text-xs text-zinc-500">
-                              (you)
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-2 text-zinc-300">
-                          {one(row.role)?.name ?? "—"}
-                        </td>
-                        <td className="px-4 py-2">
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-xs font-medium ${style.badge}`}
-                          >
-                            {style.label}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
+        {isHost && hostPlayers ? (
+          <HostDashboard
+            gameId={gameId}
+            isPaused={Boolean(isPaused)}
+            phaseType={phase?.phase_type ?? null}
+            dayNumber={phase?.day_number ?? null}
+            players={hostPlayers}
+          />
         ) : null}
 
         <div className="mt-8">

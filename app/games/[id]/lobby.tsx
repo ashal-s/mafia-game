@@ -66,6 +66,7 @@ export function Lobby({
   const [players, setPlayers] = useState<LobbyPlayer[]>(initialPlayers);
   const [origin, setOrigin] = useState("");
   const [copied, setCopied] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
 
   useEffect(() => {
     // Browser-only value; reading it after mount avoids an SSR hydration
@@ -148,6 +149,17 @@ export function Lobby({
     }
   }
 
+  async function copyCode() {
+    if (!game.code) return;
+    try {
+      await navigator.clipboard.writeText(game.code);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    } catch {
+      // Clipboard unavailable; the code is still shown to copy manually.
+    }
+  }
+
   if (game.status === "cancelled") {
     return (
       <CenteredCard>
@@ -182,7 +194,7 @@ export function Lobby({
   }
 
   return (
-    <div className="flex flex-1 flex-col bg-zinc-950 text-zinc-100">
+    <div className="flex flex-1 flex-col bg-transparent text-zinc-100">
       <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
         <Link href="/dashboard" className="text-lg font-bold tracking-tight text-red-500">
           Mafia
@@ -224,6 +236,13 @@ export function Lobby({
             <span className="font-mono text-2xl tracking-[0.35em] text-red-400">
               {game.code}
             </span>
+            <button
+              type="button"
+              onClick={copyCode}
+              className="h-9 shrink-0 rounded-lg border border-zinc-700 px-3 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-zinc-100"
+            >
+              {copiedCode ? "Copied" : "Copy code"}
+            </button>
           </div>
           <div className="mt-3 flex gap-2">
             <input
@@ -356,7 +375,7 @@ export function Lobby({
 
 function CenteredCard({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-zinc-950 px-6 py-12 text-zinc-100">
+    <div className="flex flex-1 flex-col items-center justify-center bg-transparent px-6 py-12 text-zinc-100">
       <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
         {children}
       </div>

@@ -48,7 +48,7 @@ export default async function InvitePage({
   const hostName = host?.display_name || host?.username;
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-zinc-950 px-6 py-12 text-zinc-100">
+    <div className="flex flex-1 flex-col items-center justify-center bg-transparent px-6 py-12 text-zinc-100">
       <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
         <p className="text-xs font-medium uppercase tracking-widest text-zinc-500">
           Game invite

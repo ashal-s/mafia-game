@@ -75,10 +75,12 @@ export function PhaseBar({
   gameId,
   isHost,
   initialPhase,
+  paused = false,
 }: {
   gameId: string;
   isHost: boolean;
   initialPhase: PhaseRow | null;
+  paused?: boolean;
 }) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
@@ -136,8 +138,9 @@ export function PhaseBar({
     ? Math.max(0, Math.floor((new Date(phase.ends_at).getTime() - now) / 1000))
     : null;
 
-  const timerText =
-    secondsLeft === null
+  const timerText = paused
+    ? "Paused"
+    : secondsLeft === null
       ? "--:--"
       : secondsLeft === 0
         ? "Time's up"
