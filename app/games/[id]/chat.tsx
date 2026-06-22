@@ -259,7 +259,7 @@ export function Chat({
               onChange={(e) => setText(e.target.value)}
               maxLength={500}
               placeholder={`Message ${roomLabel(activeRoom!).toLowerCase()}…`}
-              className="h-10 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none"
+              className="h-10 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-base text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none"
             />
             <button
               type="submit"

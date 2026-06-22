@@ -6,10 +6,10 @@ import { Lobby } from "./lobby";
 import {
   RoleReveal,
   type RoleConfig,
-  type Investigation,
   type RosterEntry,
   type RoundResults,
 } from "./role-reveal";
+import type { ActivityEntry } from "./activity-log";
 import type { NightActionProps } from "./night-actions";
 import type { VoteActionProps } from "./vote-actions";
 import type { ChatRoomInfo } from "./chat";
@@ -130,7 +130,6 @@ export default async function GamePage({
     );
 
     let night: NightActionProps | null = null;
-    let investigation: Investigation = null;
 
     // Night action UI: only while the active phase is night and the player has
     // a living, acting role.
@@ -283,6 +282,10 @@ export default async function GamePage({
     };
 
     const chatRooms: ChatRoomInfo[] = (chatRoomRows ?? [])
+      .filter(
+        (r) =>
+          r.type !== "dead" || selfStatus === "dead" || isHost,
+      )
       .slice()
       .sort((a, b) => (ROOM_RANK[a.type] ?? 9) - (ROOM_RANK[b.type] ?? 9))
       .map((r) => {
@@ -374,35 +377,130 @@ export default async function GamePage({
       };
     }
 
-    // Detective's most recent private finding (shown in any phase).
-    if (selfPlayerId && selfRoleKey === "detective") {
-      const { data: lastInv } = await supabase
-        .from("role_actions")
-        .select("result")
-        .eq("actor_id", selfPlayerId)
-        .eq("action_type", "investigate")
-        .eq("resolved", true)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      const result = lastInv?.result as {
-        suspicious?: boolean;
-        target_id?: string;
-      } | null;
-      if (result && typeof result.suspicious === "boolean" && result.target_id) {
-        const { data: targetPlayer } = await supabase
-          .from("game_players")
+    // Player-specific activity history (own actions and events only).
+    let activityLog: ActivityEntry[] = [];
+    if (selfPlayerId) {
+      const [{ data: myActions }, { data: myEvents }] = await Promise.all([
+        supabase
+          .from("role_actions")
           .select(
-            "profile:profiles!game_players_user_id_fkey(username, display_name)",
+            "id, action_type, target_id, result, created_at, phase:game_phases(day_number)",
           )
-          .eq("id", result.target_id)
-          .maybeSingle();
-        investigation = {
-          targetName: profileName(targetPlayer?.profile),
-          suspicious: result.suspicious,
-        };
+          .eq("actor_id", selfPlayerId)
+          .eq("resolved", true)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("game_events")
+          .select("id, event_type, data, created_at, actor_id")
+          .eq("game_id", id)
+          .in("event_type", ["player_eliminated", "player_saved"])
+          .order("created_at", { ascending: false }),
+      ]);
+
+      const entries: ActivityEntry[] = [];
+
+      for (const action of myActions ?? []) {
+        const phase = firstOf(
+          action.phase as
+            | { day_number?: number }
+            | { day_number?: number }[]
+            | null,
+        );
+        const dayLabel = phase?.day_number
+          ? `Day ${phase.day_number}`
+          : "This round";
+
+        if (action.action_type === "investigate") {
+          const result = action.result as {
+            suspicious?: boolean;
+            target_id?: string;
+          } | null;
+          if (result?.target_id && typeof result.suspicious === "boolean") {
+            entries.push({
+              id: action.id,
+              at: action.created_at,
+              title: "Investigation result",
+              detail: `${nameByPlayerId.get(result.target_id) ?? "Your target"} is ${
+                result.suspicious ? "suspicious" : "not suspicious"
+              } (${dayLabel}).`,
+              tone: result.suspicious ? "danger" : "success",
+            });
+          }
+        } else if (action.target_id) {
+          const targetName = nameByPlayerId.get(action.target_id) ?? "a player";
+          if (action.action_type === "mafia_kill") {
+            entries.push({
+              id: action.id,
+              at: action.created_at,
+              title: "Mafia kill target",
+              detail: `You chose ${targetName} as the mafia's target (${dayLabel}).`,
+              tone: "danger",
+            });
+          } else if (action.action_type === "heal") {
+            entries.push({
+              id: action.id,
+              at: action.created_at,
+              title: "Protection used",
+              detail: `You protected ${targetName} (${dayLabel}).`,
+              tone: "success",
+            });
+          } else if (action.action_type === "sniper_shoot") {
+            entries.push({
+              id: action.id,
+              at: action.created_at,
+              title: "Sniper shot",
+              detail: `You shot ${targetName} (${dayLabel}).`,
+              tone: "danger",
+            });
+          }
+        } else if (action.action_type === "sniper_shoot") {
+          entries.push({
+            id: action.id,
+            at: action.created_at,
+            title: "Held fire",
+            detail: `You chose not to shoot (${dayLabel}).`,
+            tone: "neutral",
+          });
+        }
       }
+
+      for (const ev of myEvents ?? []) {
+        const data = ev.data as {
+          player_id?: string;
+          cause?: string;
+          day_number?: number;
+        } | null;
+        const dayLabel = data?.day_number ? `Day ${data.day_number}` : "";
+
+        if (ev.event_type === "player_eliminated" && ev.actor_id === selfPlayerId) {
+          const cause =
+            data?.cause === "vote"
+              ? "voted out by the town"
+              : "killed during the night";
+          entries.push({
+            id: ev.id,
+            at: ev.created_at,
+            title: "You were eliminated",
+            detail: `You were ${cause}${dayLabel ? ` (${dayLabel})` : ""}.`,
+            tone: "danger",
+          });
+        } else if (
+          ev.event_type === "player_saved" &&
+          data?.player_id === selfPlayerId
+        ) {
+          entries.push({
+            id: ev.id,
+            at: ev.created_at,
+            title: "You were saved",
+            detail: `Someone protected you from an attack${dayLabel ? ` (${dayLabel})` : ""}.`,
+            tone: "success",
+          });
+        }
+      }
+
+      activityLog = entries.sort(
+        (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
+      );
     }
 
     return (
@@ -420,7 +518,8 @@ export default async function GamePage({
         voting={voting}
         results={results}
         roster={roster}
-        investigation={investigation}
+        activityLog={activityLog}
+        selfAlive={selfStatus === "alive"}
         chat={{
           gameId: game.id,
           selfPlayerId,

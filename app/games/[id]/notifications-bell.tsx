@@ -46,6 +46,16 @@ export function NotificationsBell({
 
   const unread = items.filter((n) => !n.read).length;
 
+  const loadNotifications = useCallback(async () => {
+    const { data } = await supabase
+      .from("notifications")
+      .select("id, type, title, body, read, created_at")
+      .eq("game_id", gameId)
+      .order("created_at", { ascending: false })
+      .limit(30);
+    if (data) setItems(data as NotificationRow[]);
+  }, [supabase, gameId]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -94,6 +104,20 @@ export function NotificationsBell({
     };
   }, [supabase, userId, gameId]);
 
+  // Re-pull notifications when the app returns to the foreground, since the
+  // realtime socket is dropped while a PWA is backgrounded / the phone is locked.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void loadNotifications();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [loadNotifications]);
+
   // Close the panel when clicking outside it.
   useEffect(() => {
     if (!open) return;
@@ -127,7 +151,7 @@ export function NotificationsBell({
   }, [supabase, gameId, userId]);
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="relative z-[100]">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -156,7 +180,7 @@ export function NotificationsBell({
       </button>
 
       {open ? (
-        <div className="absolute right-0 z-20 mt-2 w-80 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-xl">
+        <div className="absolute right-0 z-[100] mt-2 w-80 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-xl">
           <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2.5">
             <span className="text-sm font-semibold text-zinc-100">
               Notifications

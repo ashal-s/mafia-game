@@ -4,6 +4,7 @@ import { NightActions, type NightActionProps } from "./night-actions";
 import { VoteActions, type VoteActionProps } from "./vote-actions";
 import { Chat, type ChatProps } from "./chat";
 import { NotificationsBell } from "./notifications-bell";
+import { NotificationOptIn } from "./notification-opt-in";
 import { HostDashboard, type HostPlayer } from "./host-dashboard";
 import { toggleMute } from "@/app/games/actions";
 import {
@@ -11,10 +12,7 @@ import {
   DEFAULT_SNIPER_BULLETS,
 } from "@/lib/night";
 
-export type Investigation = {
-  targetName: string;
-  suspicious: boolean;
-} | null;
+import { ActivityLog, type ActivityEntry } from "./activity-log";
 
 export type RosterEntry = {
   id: string;
@@ -109,7 +107,8 @@ export function RoleReveal({
   voting,
   results,
   roster,
-  investigation,
+  activityLog,
+  selfAlive = true,
   chat,
 }: {
   gameId: string;
@@ -125,7 +124,8 @@ export function RoleReveal({
   voting?: VoteActionProps | null;
   results?: RoundResults;
   roster?: RosterEntry[];
-  investigation?: Investigation;
+  activityLog?: ActivityEntry[];
+  selfAlive?: boolean;
   chat?: ChatProps | null;
 }) {
   const self = rows.find((r) => r.user_id === currentUserId);
@@ -154,7 +154,7 @@ export function RoleReveal({
 
   return (
     <div className="flex flex-1 flex-col bg-transparent text-zinc-100">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
+      <header className="relative z-50 flex items-center justify-between border-b border-zinc-800 px-6 py-4">
         <Link href="/dashboard" className="text-lg font-bold tracking-tight text-red-500">
           Mafia
         </Link>
@@ -162,6 +162,7 @@ export function RoleReveal({
           <span className="hidden text-xs font-medium uppercase tracking-widest text-zinc-500 sm:inline">
             {gameName || "Mafia game"}
           </span>
+          <NotificationOptIn />
           <NotificationsBell userId={currentUserId} gameId={gameId} />
         </div>
       </header>
@@ -181,13 +182,34 @@ export function RoleReveal({
           </div>
         ) : null}
 
+        {!selfAlive ? (
+          <div className="mt-4 rounded-xl border border-red-700/70 bg-red-950/50 px-4 py-4">
+            <p className="text-xs font-semibold uppercase tracking-widest text-red-300">
+              You are dead
+            </p>
+            <p className="mt-2 text-sm text-red-100">
+              You were eliminated and can no longer vote or use night actions. You
+              can still read town chat and speak in the graveyard.
+            </p>
+          </div>
+        ) : null}
+
         {self && selfRole && selfStyle ? (
           <section
-            className={`mt-8 rounded-2xl border p-6 ${selfStyle.card}`}
+            className={`mt-8 rounded-2xl border p-6 ${
+              selfAlive ? selfStyle.card : "border-zinc-800 bg-zinc-900/50 opacity-70"
+            }`}
           >
-            <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
-              Your role
-            </p>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
+                Your role
+              </p>
+              {!selfAlive ? (
+                <span className="rounded-full border border-red-700/60 bg-red-950/50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-red-300">
+                  Eliminated
+                </span>
+              ) : null}
+            </div>
             <div className="mt-2 flex items-center gap-3">
               <h2 className="text-2xl font-bold text-zinc-50">
                 {selfRole.name}
@@ -257,34 +279,8 @@ export function RoleReveal({
           </section>
         ) : null}
 
-        {investigation ? (
-          <section
-            className={`mt-6 rounded-2xl border p-5 ${
-              investigation.suspicious
-                ? "border-red-800/60 bg-red-950/30"
-                : "border-emerald-800/50 bg-emerald-950/20"
-            }`}
-          >
-            <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
-              Your latest finding
-            </p>
-            <p className="mt-1 text-sm text-zinc-200">
-              <span className="font-semibold text-zinc-50">
-                {investigation.targetName}
-              </span>{" "}
-              is{" "}
-              <span
-                className={
-                  investigation.suspicious
-                    ? "font-semibold text-red-300"
-                    : "font-semibold text-emerald-300"
-                }
-              >
-                {investigation.suspicious ? "suspicious" : "not suspicious"}
-              </span>
-              .
-            </p>
-          </section>
+        {activityLog && activityLog.length > 0 ? (
+          <ActivityLog entries={activityLog} />
         ) : null}
 
         {chat ? <Chat {...chat} /> : null}
