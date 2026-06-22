@@ -78,6 +78,125 @@ function profileName(
   return p?.display_name || p?.username || "Player";
 }
 
+/**
+ * Inserts the same notification for several users at once. Notifications are
+ * always tied to a game here, so the host's "insert game notifications" policy
+ * (WEB-44) lets these writes through during host-run transitions.
+ */
+async function notifyUsers(
+  supabase: DbClient,
+  gameId: string,
+  userIds: string[],
+  type: string,
+  title: string,
+  body: string,
+): Promise<void> {
+  const unique = Array.from(new Set(userIds));
+  if (unique.length === 0) return;
+  await supabase.from("notifications").insert(
+    unique.map((uid) => ({
+      user_id: uid,
+      game_id: gameId,
+      type,
+      title,
+      body,
+    })),
+  );
+}
+
+/**
+ * Fans out the "a phase started" notifications when a new phase opens: a phase
+ * notice to everyone, plus an action-required nudge to the players who actually
+ * need to do something this phase (acting roles at night, living voters during
+ * voting).
+ */
+async function notifyPhaseStart(
+  supabase: DbClient,
+  gameId: string,
+  phaseType: PhaseType,
+  dayNumber: number,
+): Promise<void> {
+  const { data: players } = await supabase
+    .from("game_players")
+    .select("user_id, status")
+    .eq("game_id", gameId);
+
+  const members = players ?? [];
+  const allUserIds = members.map((p) => p.user_id);
+  const aliveUserIds = members
+    .filter((p) => p.status === "alive")
+    .map((p) => p.user_id);
+
+  if (phaseType === "night") {
+    await notifyUsers(
+      supabase,
+      gameId,
+      allUserIds,
+      "phase",
+      "Night falls",
+      `Night ${dayNumber} has begun.`,
+    );
+
+    const { data: roleRows } = await supabase
+      .from("game_player_roles")
+      .select("user_id, alignment, role:roles(key)")
+      .eq("game_id", gameId);
+
+    const aliveSet = new Set(aliveUserIds);
+    const actors = (roleRows ?? [])
+      .filter((r) => {
+        if (!aliveSet.has(r.user_id)) return false;
+        const key = one(r.role)?.key ?? null;
+        return Boolean(nightActionForRole(key, r.alignment));
+      })
+      .map((r) => r.user_id);
+
+    await notifyUsers(
+      supabase,
+      gameId,
+      actors,
+      "action_required",
+      "Your action is needed",
+      "Use your night ability before the phase ends.",
+    );
+  } else if (phaseType === "discussion") {
+    await notifyUsers(
+      supabase,
+      gameId,
+      allUserIds,
+      "phase",
+      "Discussion has begun",
+      "Debate who the mafia might be.",
+    );
+  } else if (phaseType === "voting") {
+    await notifyUsers(
+      supabase,
+      gameId,
+      allUserIds,
+      "phase",
+      "Voting has started",
+      "Cast your vote to put a suspect on trial.",
+    );
+    await notifyUsers(
+      supabase,
+      gameId,
+      aliveUserIds,
+      "action_required",
+      "Cast your vote",
+      "Vote before the voting phase ends.",
+    );
+  } else if (phaseType === "results") {
+    await notifyUsers(
+      supabase,
+      gameId,
+      allUserIds,
+      "phase",
+      "Results are in",
+      `The Day ${dayNumber} results are ready.`,
+    );
+  }
+}
+
 
 /**
  * Parses a configurable role limit. The sentinel string "unlimited" maps to
@@ -569,6 +688,9 @@ export async function startGame(formData: FormData): Promise<void> {
     })
     .eq("id", gameId);
 
+  // Let everyone know the game has begun and nudge the night-acting roles.
+  await notifyPhaseStart(supabase, gameId, "night", 1);
+
   redirect(`/games/${gameId}`);
 }
 
@@ -673,6 +795,8 @@ export async function advancePhase(formData: FormData): Promise<void> {
     },
   });
 
+  await notifyPhaseStart(supabase, gameId, nextType, nextDay);
+
   revalidatePath(`/games/${gameId}`);
 }
 
@@ -690,11 +814,14 @@ export async function submitNightAction(
 
   const { data: game } = await supabase
     .from("games")
-    .select("id, status, settings")
+    .select("id, status, settings, is_paused")
     .eq("id", gameId)
     .maybeSingle();
   if (!game || game.status !== "in_progress") {
     return { error: "This game is not in progress." };
+  }
+  if (game.is_paused) {
+    return { error: "The game is paused by the host." };
   }
 
   // The active phase must be night.
@@ -831,11 +958,14 @@ export async function submitVote(
 
   const { data: game } = await supabase
     .from("games")
-    .select("id, status")
+    .select("id, status, is_paused")
     .eq("id", gameId)
     .maybeSingle();
   if (!game || game.status !== "in_progress") {
     return { error: "This game is not in progress." };
+  }
+  if (game.is_paused) {
+    return { error: "The game is paused by the host." };
   }
 
   // The active phase must be voting.
@@ -910,7 +1040,9 @@ async function processVoting(
 ): Promise<void> {
   const { data: players } = await supabase
     .from("game_players")
-    .select("id, user_id, status")
+    .select(
+      "id, user_id, status, profile:profiles!game_players_user_id_fkey(username, display_name)",
+    )
     .eq("game_id", gameId);
 
   const aliveIds = new Set(
@@ -919,6 +1051,10 @@ async function processVoting(
   const userByPlayer = new Map(
     (players ?? []).map((p) => [p.id, p.user_id]),
   );
+  const nameByPlayer = new Map(
+    (players ?? []).map((p) => [p.id, profileName(p.profile)]),
+  );
+  const allUserIds = (players ?? []).map((p) => p.user_id);
 
   const { data: votes } = await supabase
     .from("votes")
@@ -971,6 +1107,17 @@ async function processVoting(
         body: "The town voted to eliminate you.",
       });
     }
+
+    // Tell everyone else who the town voted out.
+    const victimName = nameByPlayer.get(eliminated) ?? "A player";
+    await notifyUsers(
+      supabase,
+      gameId,
+      allUserIds.filter((u) => u !== uid),
+      "player_killed",
+      "A player was voted out",
+      `${victimName} was eliminated by the town vote.`,
+    );
 
     await supabase.from("game_events").insert({
       game_id: gameId,
@@ -1030,15 +1177,17 @@ async function evaluateGameWinner(
 async function endGame(
   supabase: DbClient,
   gameId: string,
-  finalPhaseId: string,
-  winner: WinAlignment,
+  finalPhaseId: string | null,
+  winner: WinAlignment | null,
 ): Promise<void> {
   const now = new Date().toISOString();
 
-  await supabase
-    .from("game_phases")
-    .update({ status: "completed", ended_at: now })
-    .eq("id", finalPhaseId);
+  if (finalPhaseId) {
+    await supabase
+      .from("game_phases")
+      .update({ status: "completed", ended_at: now })
+      .eq("id", finalPhaseId);
+  }
 
   await supabase
     .from("games")
@@ -1056,6 +1205,25 @@ async function endGame(
     event_type: "game_ended",
     data: { winner_alignment: winner },
   });
+
+  // Tell everyone the game is over and who won.
+  const { data: players } = await supabase
+    .from("game_players")
+    .select("user_id")
+    .eq("game_id", gameId);
+
+  const body = winner
+    ? `${winner === "mafia" ? "The Mafia" : "The Town"} won the game.`
+    : "The host ended the game.";
+
+  await notifyUsers(
+    supabase,
+    gameId,
+    (players ?? []).map((p) => p.user_id),
+    "game_ended",
+    "The game has ended",
+    body,
+  );
 }
 
 /**
@@ -1085,6 +1253,7 @@ async function processNight(
   const aliveIds = new Set(
     (players ?? []).filter((p) => p.status === "alive").map((p) => p.id),
   );
+  const allUserIds = (players ?? []).map((p) => p.user_id);
   const alignmentByPlayer = new Map(
     (roleRows ?? []).map((r) => [r.player_id, r.alignment as string]),
   );
@@ -1154,6 +1323,18 @@ async function processNight(
         body: "You did not survive the night.",
       });
     }
+
+    // Announce the overnight death to everyone else.
+    const victimName = nameByPlayer.get(playerId) ?? "A player";
+    await notifyUsers(
+      supabase,
+      gameId,
+      allUserIds.filter((u) => u !== uid),
+      "player_killed",
+      "A player was killed",
+      `${victimName} did not survive the night.`,
+    );
+
     await supabase.from("game_events").insert({
       game_id: gameId,
       phase_id: phaseId,
@@ -1332,6 +1513,99 @@ export async function toggleMute(formData: FormData): Promise<void> {
     host_id: user.id,
     action_type: mute ? "mute_player" : "unmute_player",
     target_player_id: playerId,
+  });
+
+  revalidatePath(`/games/${gameId}`);
+}
+
+/**
+ * Host moderation: pause or resume a running game. While paused, players can't
+ * submit night actions or votes; the host can still force the next phase or end
+ * the game. Logs the action and notifies every player.
+ */
+export async function setGamePause(formData: FormData): Promise<void> {
+  const { supabase, user } = await requirePlayer();
+
+  const gameId = formData.get("game_id");
+  if (typeof gameId !== "string") return;
+
+  const pause = formData.get("pause") === "true";
+
+  const { data: game } = await supabase
+    .from("games")
+    .select("id, host_id, status")
+    .eq("id", gameId)
+    .maybeSingle();
+  if (!game || game.host_id !== user.id || game.status !== "in_progress") {
+    redirect(`/games/${gameId}`);
+  }
+
+  await supabase
+    .from("games")
+    .update({ is_paused: pause })
+    .eq("id", gameId)
+    .eq("host_id", user.id);
+
+  await supabase.from("host_actions").insert({
+    game_id: gameId,
+    host_id: user.id,
+    action_type: pause ? "pause_game" : "resume_game",
+  });
+
+  const { data: players } = await supabase
+    .from("game_players")
+    .select("user_id")
+    .eq("game_id", gameId);
+
+  await notifyUsers(
+    supabase,
+    gameId,
+    (players ?? []).map((p) => p.user_id),
+    "phase",
+    pause ? "Game paused" : "Game resumed",
+    pause
+      ? "The host paused the game. Hang tight."
+      : "The host resumed the game.",
+  );
+
+  revalidatePath(`/games/${gameId}`);
+}
+
+/**
+ * Host moderation: end the game immediately. Closes the active phase, marks the
+ * game completed with no winner, and notifies every player. The auto-win path
+ * (`advancePhase` → `endGame`) stamps a winner; this manual stop does not.
+ */
+export async function endGameByHost(formData: FormData): Promise<void> {
+  const { supabase, user } = await requirePlayer();
+
+  const gameId = formData.get("game_id");
+  if (typeof gameId !== "string") return;
+
+  const { data: game } = await supabase
+    .from("games")
+    .select("id, host_id, status")
+    .eq("id", gameId)
+    .maybeSingle();
+  if (!game || game.host_id !== user.id || game.status !== "in_progress") {
+    redirect(`/games/${gameId}`);
+  }
+
+  const { data: active } = await supabase
+    .from("game_phases")
+    .select("id")
+    .eq("game_id", gameId)
+    .eq("status", "active")
+    .order("phase_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  await endGame(supabase, gameId, active?.id ?? null, null);
+
+  await supabase.from("host_actions").insert({
+    game_id: gameId,
+    host_id: user.id,
+    action_type: "end_game",
   });
 
   revalidatePath(`/games/${gameId}`);
