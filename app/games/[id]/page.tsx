@@ -151,6 +151,7 @@ export default async function GamePage({
           .maybeSingle();
 
         let limit: { label: string; remaining: number | null } | null = null;
+        let disableSelf = false;
         if (descriptor.type === "sniper_shoot") {
           const configured = roleConfig?.sniper?.bullets;
           const max =
@@ -183,10 +184,10 @@ export default async function GamePage({
               .eq("action_type", "heal")
               .eq("target_id", selfPlayerId)
               .neq("phase_id", phase.id);
-            limit = {
-              label: "Self-heals",
-              remaining: Math.max(0, max - (count ?? 0)),
-            };
+            const remaining = Math.max(0, max - (count ?? 0));
+            limit = { label: "Self-heals", remaining };
+            // Out of self-heals: keep the action, just remove the self option.
+            disableSelf = remaining === 0;
           }
         }
 
@@ -203,6 +204,7 @@ export default async function GamePage({
           currentTargetId: myAction?.target_id ?? null,
           hasSubmitted: Boolean(myAction),
           limit,
+          disableSelf,
         };
       }
     }
