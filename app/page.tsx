@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { MafiaLogo } from "@/components/mafia-logo";
 import { getCurrentUserWithProfile } from "@/lib/profile";
 
 export default async function Home() {
   const { user, profile } = await getCurrentUserWithProfile();
 
-  // Signed-in users skip the marketing page.
   if (user) {
     redirect(profile?.username ? "/dashboard" : "/profile/setup");
   }
@@ -13,9 +13,7 @@ export default async function Home() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center bg-transparent px-4 text-center text-zinc-100">
       <main className="flex max-w-xl flex-col items-center gap-6">
-        <span className="text-5xl font-bold tracking-tight text-red-500">
-          Mafia
-        </span>
+        <MafiaLogo size="xl" />
         <h1 className="text-3xl font-semibold leading-tight text-zinc-50 sm:text-4xl">
           The classic game of deception, online.
         </h1>
