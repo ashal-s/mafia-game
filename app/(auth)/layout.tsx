@@ -1,3 +1,5 @@
+import { MafiaLogo } from "@/components/mafia-logo";
+
 export default function AuthLayout({
   children,
 }: {
@@ -6,10 +8,8 @@ export default function AuthLayout({
   return (
     <div className="flex flex-1 flex-col items-center justify-center bg-transparent px-4 py-16 text-zinc-100">
       <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <span className="text-3xl font-bold tracking-tight text-red-500">
-            Mafia
-          </span>
+        <div className="mb-8 flex flex-col items-center text-center">
+          <MafiaLogo size="lg" />
           <p className="mt-1 text-sm text-zinc-400">
             Trust no one. Survive the night.
           </p>

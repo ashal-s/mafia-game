@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AppHeader } from "@/components/app-header";
 
 type Alignment = "town" | "mafia" | "neutral";
 
@@ -53,17 +54,11 @@ export function GameOver({
 
   return (
     <div className="flex flex-1 flex-col bg-transparent text-zinc-100">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
-        <Link
-          href="/dashboard"
-          className="text-lg font-bold tracking-tight text-red-500"
-        >
-          Mafia
-        </Link>
+      <AppHeader>
         <span className="text-xs font-medium uppercase tracking-widest text-zinc-500">
           {gameName || "Mafia game"}
         </span>
-      </header>
+      </AppHeader>
 
       <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-10">
         <section
