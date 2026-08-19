@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AppHeader } from "@/components/app-header";
 import { PhaseBar, type PhaseRow } from "./phase-bar";
 import { NightActions, type NightActionProps } from "./night-actions";
 import { VoteActions, type VoteActionProps } from "./vote-actions";
@@ -154,18 +155,13 @@ export function RoleReveal({
 
   return (
     <div className="flex flex-1 flex-col bg-transparent text-zinc-100">
-      <header className="relative z-50 flex items-center justify-between border-b border-zinc-800 px-6 py-4">
-        <Link href="/dashboard" className="text-lg font-bold tracking-tight text-red-500">
-          Mafia
-        </Link>
-        <div className="flex items-center gap-3">
-          <span className="hidden text-xs font-medium uppercase tracking-widest text-zinc-500 sm:inline">
-            {gameName || "Mafia game"}
-          </span>
-          <NotificationOptIn />
-          <NotificationsBell userId={currentUserId} gameId={gameId} />
-        </div>
-      </header>
+      <AppHeader>
+        <span className="hidden text-xs font-medium uppercase tracking-widest text-zinc-500 sm:inline">
+          {gameName || "Mafia game"}
+        </span>
+        <NotificationOptIn />
+        <NotificationsBell userId={currentUserId} gameId={gameId} />
+      </AppHeader>
 
       <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-10">
         <PhaseBar
