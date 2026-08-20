@@ -274,11 +274,16 @@ export async function createGame(
   let maxPlayers = 15;
   const settingsObj: {
     composition?: Record<string, number>;
+    deadChatEnabled?: boolean;
     roleConfig?: {
       sniper?: { bullets: number | null };
       healer?: { selfHeals: number | null };
     };
   } = {};
+
+  // Graveyard chat is opt-in per game. The rest of the dead-player experience
+  // (spectating public state without acting or voting) is always available.
+  settingsObj.deadChatEnabled = formData.get("dead_chat_enabled") === "on";
 
   if (choice === "custom") {
     const playerCount = Number(formData.get("players"));
@@ -632,17 +637,26 @@ export async function startGame(formData: FormData): Promise<void> {
     ),
   );
 
-  // Create the town, mafia, and dead chat rooms once.
+  // Create shared rooms once, plus the optional graveyard selected by the host.
   const { count: roomCount } = await supabase
     .from("chat_rooms")
     .select("id", { count: "exact", head: true })
     .eq("game_id", gameId);
   if (!roomCount) {
-    await supabase.from("chat_rooms").insert([
+    const deadChatEnabled =
+      !game.settings ||
+      typeof game.settings !== "object" ||
+      Array.isArray(game.settings) ||
+      (game.settings as { deadChatEnabled?: boolean }).deadChatEnabled !== false;
+    const rooms = [
       { game_id: gameId, type: "town", name: "Town Square" },
       { game_id: gameId, type: "mafia", name: "Mafia" },
-      { game_id: gameId, type: "dead", name: "Graveyard" },
-    ]);
+    ] as const;
+    await supabase.from("chat_rooms").insert(
+      deadChatEnabled
+        ? [...rooms, { game_id: gameId, type: "dead" as const, name: "Graveyard" }]
+        : [...rooms],
+    );
   }
 
   // Open the first night phase once.

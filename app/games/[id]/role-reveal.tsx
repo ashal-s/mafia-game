@@ -151,6 +151,7 @@ export function RoleReveal({
   const mafiaTeammates = rows.filter(
     (r) => r.user_id !== currentUserId && r.alignment === "mafia",
   );
+  const hasDeadChat = Boolean(chat?.rooms.some((room) => room.type === "dead"));
 
   return (
     <div className="flex flex-1 flex-col bg-transparent text-zinc-100">
@@ -189,7 +190,8 @@ export function RoleReveal({
             </p>
             <p className="mt-2 text-sm text-red-100">
               You were eliminated and can no longer vote or use night actions. You
-              can still read town chat and speak in the graveyard.
+              can still read town chat and follow public game events.
+              {hasDeadChat ? " You can also speak in the graveyard." : ""}
             </p>
           </div>
         ) : null}
