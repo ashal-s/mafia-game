@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { GameTimeline, type TimelineEvent } from "./game-timeline";
 
 type Alignment = "town" | "mafia" | "neutral";
 
@@ -44,10 +45,14 @@ export function GameOver({
   gameName,
   winner,
   reveal,
+  timeline,
+  isHost,
 }: {
   gameName: string | null;
   winner: Alignment | null;
   reveal: RevealEntry[];
+  timeline: TimelineEvent[];
+  isHost: boolean;
 }) {
   const banner = winner ? WINNER_BANNER[winner] : null;
 
@@ -135,6 +140,8 @@ export function GameOver({
             </table>
           </div>
         </section>
+
+        <GameTimeline events={timeline} isHost={isHost} />
 
         <div className="mt-8">
           <Link
