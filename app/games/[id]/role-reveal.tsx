@@ -153,6 +153,18 @@ export function RoleReveal({
     (r) => r.user_id !== currentUserId && r.alignment === "mafia",
   );
 
+  const playerPhaseState = !selfAlive
+    ? "dead"
+    : night
+      ? night.hasSubmitted
+        ? "submitted"
+        : "action"
+      : voting?.canVote
+        ? voting.hasVoted
+          ? "submitted"
+          : "action"
+        : "waiting";
+
   return (
     <div className="flex flex-1 flex-col bg-transparent text-zinc-100">
       <AppHeader>
@@ -169,6 +181,7 @@ export function RoleReveal({
           isHost={isHost}
           initialPhase={phase ?? null}
           paused={Boolean(isPaused)}
+          playerState={playerPhaseState}
         />
 
         {isPaused ? (
