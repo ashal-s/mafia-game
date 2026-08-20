@@ -15,6 +15,7 @@ import type { VoteActionProps } from "./vote-actions";
 import type { ChatRoomInfo } from "./chat";
 import type { HostPlayer } from "./host-dashboard";
 import { GameOver } from "./game-over";
+import type { ReconnectState } from "./reconnect-status";
 import {
   DEFAULT_HEALER_SELF_HEALS,
   DEFAULT_SNIPER_BULLETS,
@@ -264,6 +265,18 @@ export default async function GamePage({
     const selfMuted = Boolean(selfPlayer?.is_muted);
     const selfIsMafia = selfRow?.alignment === "mafia";
 
+    // The most recent non-chat notification summarizes what changed while the
+    // player was away. Owner-only RLS ensures this can never expose an alert
+    // belonging to somebody else.
+    const { data: latestNotification } = await supabase
+      .from("notifications")
+      .select("type, title, body, created_at")
+      .eq("game_id", id)
+      .neq("type", "chat")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
     const namesById: Record<string, string> = {};
     for (const p of allPlayers ?? []) {
       namesById[p.id] = profileName(p.profile);
@@ -348,6 +361,23 @@ export default async function GamePage({
         hasVoted: Boolean(myVote),
         initialVotes: voteRows ?? [],
       };
+    }
+
+    // Resolve one unambiguous return state. More restrictive states win: a
+    // paused or eliminated player should never be told to submit an action.
+    let reconnectState: ReconnectState = "waiting";
+    if (game.is_paused) {
+      reconnectState = "paused";
+    } else if (selfStatus === "dead") {
+      reconnectState = "dead";
+    } else if (night) {
+      reconnectState = night.hasSubmitted
+        ? "already_submitted"
+        : "action_required";
+    } else if (voting?.canVote) {
+      reconnectState = voting.hasVoted
+        ? "already_submitted"
+        : "action_required";
     }
 
     // Results UI: surface the outcome of the day's vote during the results phase.
@@ -527,6 +557,8 @@ export default async function GamePage({
           rooms: chatRooms,
           namesById,
         }}
+        reconnectState={reconnectState}
+        latestAlert={latestNotification ?? null}
       />
     );
   }
