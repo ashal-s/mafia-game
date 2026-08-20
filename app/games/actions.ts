@@ -1225,8 +1225,15 @@ async function processVoting(
       day_number: dayNumber,
       eliminated,
       tie: tie && topCount > 0,
-      tally: Object.fromEntries(tally),
     },
+  });
+
+  await supabase.from("game_events").insert({
+    game_id: gameId,
+    phase_id: phaseId,
+    event_type: "voting_tally",
+    visibility: "host",
+    data: { day_number: dayNumber, tally: Object.fromEntries(tally) },
   });
 }
 
@@ -1445,6 +1452,7 @@ async function processNight(
       game_id: gameId,
       phase_id: phaseId,
       event_type: "player_saved",
+      visibility: "host",
       data: { player_id: protectedTarget, day_number: dayNumber },
     });
   }

@@ -14,6 +14,7 @@ import {
 } from "@/lib/night";
 
 import { ActivityLog, type ActivityEntry } from "./activity-log";
+import { GameTimeline, type TimelineEvent } from "./game-timeline";
 
 export type RosterEntry = {
   id: string;
@@ -109,6 +110,7 @@ export function RoleReveal({
   results,
   roster,
   activityLog,
+  timeline,
   selfAlive = true,
   chat,
 }: {
@@ -126,6 +128,7 @@ export function RoleReveal({
   results?: RoundResults;
   roster?: RosterEntry[];
   activityLog?: ActivityEntry[];
+  timeline?: TimelineEvent[];
   selfAlive?: boolean;
   chat?: ChatProps | null;
 }) {
@@ -291,6 +294,8 @@ export function RoleReveal({
         {activityLog && activityLog.length > 0 ? (
           <ActivityLog entries={activityLog} />
         ) : null}
+
+        {timeline ? <GameTimeline events={timeline} isHost={isHost} /> : null}
 
         {chat ? <Chat {...chat} /> : null}
 
