@@ -249,6 +249,7 @@ export default async function GamePage({
             roleName: firstOf(rr?.role)?.name ?? "—",
             alignment,
             alive: p.status === "alive",
+            status: p.status,
             isHost: p.is_host,
             muted: p.is_muted,
             ready: p.is_ready,
