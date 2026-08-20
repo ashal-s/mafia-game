@@ -836,10 +836,35 @@ export async function advancePhase(formData: FormData): Promise<void> {
     redirect(`/games/${gameId}`);
   }
 
+  const { data: beforePhase } = await supabase
+    .from("game_phases")
+    .select("id, phase_type, phase_number, day_number")
+    .eq("game_id", gameId)
+    .eq("status", "active")
+    .order("phase_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
   const result = await transitionPhase(supabase, gameId);
   if (result.error) {
     redirect(`/games/${gameId}?error=${encodeURIComponent(result.error)}`);
   }
+
+  const { data: afterPhase } = await supabase
+    .from("game_phases")
+    .select("id, phase_type, phase_number, day_number")
+    .eq("game_id", gameId)
+    .eq("status", "active")
+    .order("phase_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  await supabase.from("host_actions").insert({
+    game_id: gameId,
+    host_id: user.id,
+    action_type: "force_next_phase",
+    payload: { before: beforePhase, after: afterPhase, ended: result.ended },
+  });
 
   revalidatePath(`/games/${gameId}`);
 }
@@ -1625,6 +1650,13 @@ export async function toggleMute(formData: FormData): Promise<void> {
     redirect(`/games/${gameId}`);
   }
 
+  const { data: target } = await supabase
+    .from("game_players")
+    .select("is_muted")
+    .eq("id", playerId)
+    .eq("game_id", gameId)
+    .maybeSingle();
+
   await supabase
     .from("game_players")
     .update({ is_muted: mute })
@@ -1637,6 +1669,7 @@ export async function toggleMute(formData: FormData): Promise<void> {
     host_id: user.id,
     action_type: mute ? "mute_player" : "unmute_player",
     target_player_id: playerId,
+    payload: { before: { is_muted: target?.is_muted ?? !mute }, after: { is_muted: mute } },
   });
 
   revalidatePath(`/games/${gameId}`);
@@ -1674,6 +1707,13 @@ export async function setGamePause(formData: FormData): Promise<void> {
     game_id: gameId,
     host_id: user.id,
     action_type: pause ? "pause_game" : "resume_game",
+    payload: { before: { is_paused: !pause }, after: { is_paused: pause } },
+  });
+
+  await supabase.from("game_events").insert({
+    game_id: gameId,
+    event_type: pause ? "game_paused" : "game_resumed",
+    data: { message: pause ? "The host paused the game." : "The host resumed the game." },
   });
 
   const { data: players } = await supabase
@@ -1729,8 +1769,120 @@ export async function endGameByHost(formData: FormData): Promise<void> {
   await supabase.from("host_actions").insert({
     game_id: gameId,
     host_id: user.id,
-    action_type: "end_game",
+    action_type: "force_game_end",
+    payload: { before: { status: game.status }, after: { status: "completed" } },
   });
 
+  revalidatePath(`/games/${gameId}`);
+}
+
+/** Corrects a player's alive/dead state without exposing a general player edit API. */
+export async function setPlayerLifeState(formData: FormData): Promise<void> {
+  const { supabase, user } = await requirePlayer();
+  const gameId = formData.get("game_id");
+  const playerId = formData.get("player_id");
+  const nextStatus = formData.get("status");
+  if (
+    typeof gameId !== "string" ||
+    typeof playerId !== "string" ||
+    (nextStatus !== "alive" && nextStatus !== "dead")
+  ) return;
+
+  const [{ data: game }, { data: player }] = await Promise.all([
+    supabase.from("games").select("host_id, status").eq("id", gameId).maybeSingle(),
+    supabase
+      .from("game_players")
+      .select("id, status, user_id")
+      .eq("id", playerId)
+      .eq("game_id", gameId)
+      .maybeSingle(),
+  ]);
+  if (!game || game.host_id !== user.id || game.status !== "in_progress" || !player) {
+    redirect(`/games/${gameId}`);
+  }
+  if (player.status === nextStatus) return;
+
+  const eliminatedAt = nextStatus === "dead" ? new Date().toISOString() : null;
+  const { error } = await supabase
+    .from("game_players")
+    .update({ status: nextStatus, eliminated_at: eliminatedAt })
+    .eq("id", playerId)
+    .eq("game_id", gameId);
+  if (error) redirect(`/games/${gameId}?error=${encodeURIComponent(error.message)}`);
+
+  await supabase.from("host_actions").insert({
+    game_id: gameId,
+    host_id: user.id,
+    action_type: "set_player_status",
+    target_player_id: playerId,
+    payload: { before: { status: player.status }, after: { status: nextStatus } },
+  });
+  await supabase.from("game_events").insert({
+    game_id: gameId,
+    actor_id: playerId,
+    event_type: "host_player_status_changed",
+    data: { player_id: playerId, from: player.status, to: nextStatus },
+  });
+  await notifyUsers(supabase, gameId, [player.user_id], "host_override", "Player state corrected", `The host marked you ${nextStatus}.`);
+  revalidatePath(`/games/${gameId}`);
+}
+
+/** Removes an inactive participant while retaining their row for audit history. */
+export async function removePlayerByHost(formData: FormData): Promise<void> {
+  const { supabase, user } = await requirePlayer();
+  const gameId = formData.get("game_id");
+  const playerId = formData.get("player_id");
+  if (typeof gameId !== "string" || typeof playerId !== "string") return;
+
+  const [{ data: game }, { data: player }] = await Promise.all([
+    supabase.from("games").select("host_id, status").eq("id", gameId).maybeSingle(),
+    supabase.from("game_players").select("id, status, is_host, user_id").eq("id", playerId).eq("game_id", gameId).maybeSingle(),
+  ]);
+  if (!game || game.host_id !== user.id || game.status !== "in_progress" || !player || player.is_host) {
+    redirect(`/games/${gameId}`);
+  }
+
+  const { error } = await supabase.from("game_players").update({ status: "left" }).eq("id", playerId).eq("game_id", gameId);
+  if (error) redirect(`/games/${gameId}?error=${encodeURIComponent(error.message)}`);
+  await supabase.from("host_actions").insert({
+    game_id: gameId, host_id: user.id, action_type: "remove_inactive_player", target_player_id: playerId,
+    payload: { before: { status: player.status }, after: { status: "left" } },
+  });
+  await supabase.from("game_events").insert({
+    game_id: gameId, actor_id: playerId, event_type: "player_removed",
+    data: { player_id: playerId, reason: "inactive" },
+  });
+  await notifyUsers(supabase, gameId, [player.user_id], "host_override", "Removed from game", "The host removed you from the active game.");
+  revalidatePath(`/games/${gameId}`);
+}
+
+/** Runs the active phase resolver again, useful after correcting submitted inputs. */
+export async function reprocessCurrentPhase(formData: FormData): Promise<void> {
+  const { supabase, user } = await requirePlayer();
+  const gameId = formData.get("game_id");
+  if (typeof gameId !== "string") return;
+  const { data: game } = await supabase.from("games").select("host_id, status").eq("id", gameId).maybeSingle();
+  if (!game || game.host_id !== user.id || game.status !== "in_progress") redirect(`/games/${gameId}`);
+
+  const { data: phase } = await supabase
+    .from("game_phases")
+    .select("id, phase_type, phase_number, day_number")
+    .eq("game_id", gameId).eq("status", "active")
+    .order("phase_number", { ascending: false }).limit(1).maybeSingle();
+  if (!phase || (phase.phase_type !== "night" && phase.phase_type !== "voting")) {
+    redirect(`/games/${gameId}?error=${encodeURIComponent("Only night and voting phases can be reprocessed.")}`);
+  }
+
+  if (phase.phase_type === "night") await processNight(supabase, gameId, phase.id, phase.day_number);
+  else await processVoting(supabase, gameId, phase.id, phase.day_number);
+
+  await supabase.from("host_actions").insert({
+    game_id: gameId, host_id: user.id, action_type: "reprocess_phase",
+    payload: { phase_id: phase.id, phase_type: phase.phase_type, phase_number: phase.phase_number, day_number: phase.day_number },
+  });
+  await supabase.from("game_events").insert({
+    game_id: gameId, phase_id: phase.id, event_type: "phase_reprocessed",
+    data: { phase_type: phase.phase_type, phase_number: phase.phase_number, day_number: phase.day_number },
+  });
   revalidatePath(`/games/${gameId}`);
 }
