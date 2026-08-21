@@ -12,6 +12,15 @@ import {
   nightActionForRole,
 } from "@/lib/night";
 import { evaluateWin, type WinAlignment } from "@/lib/win";
+import {
+  defaultRoleKeys,
+  investigate,
+  nextPhase,
+  resolveNight,
+  shuffle,
+  tallyVotes,
+  type PhaseType,
+} from "@/lib/game-engine";
 
 export type FormState = { error?: string };
 
@@ -27,18 +36,7 @@ function generateInviteCode(): string {
   return code;
 }
 
-function shuffle<T>(items: T[]): T[] {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
 // Phase cycle: night → discussion → voting → results → (next day) night.
-type PhaseType = "night" | "discussion" | "voting" | "results";
-const PHASE_ORDER: PhaseType[] = ["night", "discussion", "voting", "results"];
 const PHASE_DURATIONS_SECONDS: Record<PhaseType, number> = {
   night: 60,
   discussion: 120,
@@ -46,10 +44,6 @@ const PHASE_DURATIONS_SECONDS: Record<PhaseType, number> = {
   results: 30,
 };
 
-function nextPhaseOf(current: PhaseType): PhaseType {
-  const idx = PHASE_ORDER.indexOf(current);
-  return PHASE_ORDER[(idx + 1) % PHASE_ORDER.length];
-}
 
 type DbClient = Awaited<ReturnType<typeof createClient>>;
 
@@ -588,15 +582,10 @@ export async function startGame(formData: FormData): Promise<void> {
 
   if (roleIds.length === 0) {
     // Fallback composition derived from the player count.
-    const mafiaCount = Math.max(1, Math.floor(players.length / 4));
-    const mafia = roleByKey.get("mafia");
-    const detective = roleByKey.get("detective");
-    const healer = roleByKey.get("healer");
-    const sniper = roleByKey.get("sniper");
-    for (let i = 0; i < mafiaCount && mafia; i++) roleIds.push(mafia.id);
-    if (detective) roleIds.push(detective.id);
-    if (healer) roleIds.push(healer.id);
-    if (sniper && players.length >= 7) roleIds.push(sniper.id);
+    for (const key of defaultRoleKeys(players.length)) {
+      const role = roleByKey.get(key);
+      if (role) roleIds.push(role.id);
+    }
   }
 
   while (roleIds.length < players.length) roleIds.push(villager.id);
@@ -732,7 +721,7 @@ async function transitionPhase(
   const currentType = (current?.phase_type ?? "results") as PhaseType;
   const currentDay = current?.day_number ?? 1;
 
-  const nextType = nextPhaseOf(currentType);
+  const nextType = nextPhase(currentType);
   // A full cycle completes when results rolls back to night — bump the day.
   const nextDay = currentType === "results" ? currentDay + 1 : currentDay;
   const nextNumber = (current?.phase_number ?? 0) + 1;
@@ -1144,32 +1133,14 @@ async function processVoting(
     .select("voter_id, target_id")
     .eq("phase_id", phaseId);
 
-  // Tally one vote per living voter for living targets (abstains are ignored).
-  const tally = new Map<string, number>();
-  for (const v of votes ?? []) {
-    if (
-      v.target_id &&
-      aliveIds.has(v.voter_id) &&
-      aliveIds.has(v.target_id)
-    ) {
-      tally.set(v.target_id, (tally.get(v.target_id) ?? 0) + 1);
-    }
-  }
-
-  // Find the highest-voted target; a draw for the top spot eliminates no one.
-  let eliminated: string | null = null;
-  let topCount = 0;
-  let tie = false;
-  for (const [target, count] of tally) {
-    if (count > topCount) {
-      topCount = count;
-      eliminated = target;
-      tie = false;
-    } else if (count === topCount) {
-      tie = true;
-    }
-  }
-  if (tie || topCount === 0) eliminated = null;
+  const voteResult = tallyVotes(
+    (votes ?? []).map((vote) => ({
+      voterId: vote.voter_id,
+      targetId: vote.target_id,
+    })),
+    aliveIds,
+  );
+  const { eliminated } = voteResult;
 
   const now = new Date().toISOString();
 
@@ -1224,8 +1195,8 @@ async function processVoting(
     data: {
       day_number: dayNumber,
       eliminated,
-      tie: tie && topCount > 0,
-      tally: Object.fromEntries(tally),
+      tie: voteResult.tied,
+      tally: voteResult.tally,
     },
   });
 }
@@ -1359,43 +1330,22 @@ async function processNight(
     .eq("phase_id", phaseId);
   const list = actions ?? [];
 
-  // Mafia kill: pick the target with the most votes among living players.
-  const mafiaVotes = new Map<string, number>();
-  for (const a of list) {
-    if (a.action_type === "mafia_kill" && a.target_id && aliveIds.has(a.target_id)) {
-      mafiaVotes.set(a.target_id, (mafiaVotes.get(a.target_id) ?? 0) + 1);
-    }
-  }
-  let mafiaTarget: string | null = null;
-  let bestVotes = 0;
-  for (const [target, votes] of mafiaVotes) {
-    if (votes > bestVotes) {
-      bestVotes = votes;
-      mafiaTarget = target;
-    }
-  }
-
-  const sniperTarget =
-    list.find(
-      (a) =>
-        a.action_type === "sniper_shoot" &&
-        a.target_id &&
-        aliveIds.has(a.target_id),
-    )?.target_id ?? null;
-
-  const protectedTarget =
-    list.find(
-      (a) => a.action_type === "heal" && a.target_id && aliveIds.has(a.target_id),
-    )?.target_id ?? null;
-
-  // Deaths: mafia target dies unless protected; the sniper's shot always lands.
-  const deaths = new Set<string>();
-  if (mafiaTarget && mafiaTarget !== protectedTarget) deaths.add(mafiaTarget);
-  if (sniperTarget) deaths.add(sniperTarget);
+  const nightResult = resolveNight(
+    list.map((action) => ({
+      type: action.action_type as
+        | "mafia_kill"
+        | "heal"
+        | "investigate"
+        | "sniper_shoot",
+      targetId: action.target_id,
+    })),
+    aliveIds,
+  );
+  const { mafiaTarget, protectedTarget } = nightResult;
 
   const now = new Date().toISOString();
 
-  for (const playerId of deaths) {
+  for (const playerId of nightResult.deaths) {
     await supabase
       .from("game_players")
       .update({ status: "dead", eliminated_at: now })
@@ -1452,7 +1402,7 @@ async function processNight(
   // Detective: save a private suspicious / not-suspicious result + notify them.
   for (const a of list) {
     if (a.action_type === "investigate" && a.target_id) {
-      const suspicious = alignmentByPlayer.get(a.target_id) === "mafia";
+      const { suspicious } = investigate(alignmentByPlayer.get(a.target_id));
       await supabase
         .from("role_actions")
         .update({
@@ -1493,7 +1443,7 @@ async function processNight(
     game_id: gameId,
     phase_id: phaseId,
     event_type: "night_resolved",
-    data: { day_number: dayNumber, deaths: Array.from(deaths) },
+    data: { day_number: dayNumber, deaths: nightResult.deaths },
   });
 }
 
