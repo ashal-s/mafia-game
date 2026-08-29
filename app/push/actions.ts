@@ -1,13 +1,19 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { z } from "zod";
 
 export type SavePushResult = { ok: boolean; error?: string };
 
-type IncomingSubscription = {
-  endpoint: string;
-  keys: { p256dh: string; auth: string };
-};
+export const pushSubscriptionSchema = z.object({
+  endpoint: z.url("The push endpoint is invalid.").max(2048),
+  keys: z.object({
+    p256dh: z.string().min(1).max(512),
+    auth: z.string().min(1).max(512),
+  }),
+});
+export type IncomingSubscription = z.infer<typeof pushSubscriptionSchema>;
+const userAgentSchema = z.string().max(512, "User agent is too long.").optional();
 
 /**
  * Stores (or refreshes) the current user's Web Push subscription. Keyed on the
@@ -18,13 +24,10 @@ export async function savePushSubscription(
   subscription: IncomingSubscription,
   userAgent?: string,
 ): Promise<SavePushResult> {
-  if (
-    !subscription?.endpoint ||
-    !subscription.keys?.p256dh ||
-    !subscription.keys?.auth
-  ) {
-    return { ok: false, error: "Invalid subscription." };
-  }
+  const parsed = pushSubscriptionSchema.safeParse(subscription);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid subscription." };
+  const parsedUserAgent = userAgentSchema.safeParse(userAgent);
+  if (!parsedUserAgent.success) return { ok: false, error: parsedUserAgent.error.issues[0]?.message };
 
   const supabase = await createClient();
   const {
@@ -35,10 +38,10 @@ export async function savePushSubscription(
   const { error } = await supabase.from("push_subscriptions").upsert(
     {
       user_id: user.id,
-      endpoint: subscription.endpoint,
-      p256dh: subscription.keys.p256dh,
-      auth: subscription.keys.auth,
-      user_agent: userAgent ?? null,
+      endpoint: parsed.data.endpoint,
+      p256dh: parsed.data.keys.p256dh,
+      auth: parsed.data.keys.auth,
+      user_agent: parsedUserAgent.data ?? null,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "endpoint" },
@@ -52,7 +55,8 @@ export async function savePushSubscription(
 export async function deletePushSubscription(
   endpoint: string,
 ): Promise<SavePushResult> {
-  if (!endpoint) return { ok: false, error: "Missing endpoint." };
+  const parsed = z.url("The push endpoint is invalid.").max(2048).safeParse(endpoint);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message };
 
   const supabase = await createClient();
   const {
@@ -63,7 +67,7 @@ export async function deletePushSubscription(
   const { error } = await supabase
     .from("push_subscriptions")
     .delete()
-    .eq("endpoint", endpoint)
+    .eq("endpoint", parsed.data)
     .eq("user_id", user.id);
 
   if (error) return { ok: false, error: error.message };

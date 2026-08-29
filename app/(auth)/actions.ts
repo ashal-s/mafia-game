@@ -3,28 +3,28 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { z } from "zod";
 
 export type AuthState = {
   error?: string;
   message?: string;
 };
 
-function readCredentials(formData: FormData) {
-  return {
-    email: String(formData.get("email") ?? "").trim(),
-    password: String(formData.get("password") ?? ""),
-  };
-}
+export const credentialsSchema = z.object({
+  email: z.email("Enter a valid email address.").trim(),
+  password: z.string().min(1, "Password is required."),
+});
+export const signupSchema = credentialsSchema.extend({
+  password: z.string().min(6, "Password must be at least 6 characters.").max(128, "Password must be 128 characters or fewer."),
+});
 
 export async function login(
   _prevState: AuthState,
   formData: FormData,
 ): Promise<AuthState> {
-  const { email, password } = readCredentials(formData);
-
-  if (!email || !password) {
-    return { error: "Email and password are required." };
-  }
+  const parsed = credentialsSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message };
+  const { email, password } = parsed.data;
 
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -40,14 +40,9 @@ export async function signup(
   _prevState: AuthState,
   formData: FormData,
 ): Promise<AuthState> {
-  const { email, password } = readCredentials(formData);
-
-  if (!email || !password) {
-    return { error: "Email and password are required." };
-  }
-  if (password.length < 6) {
-    return { error: "Password must be at least 6 characters." };
-  }
+  const parsed = signupSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message };
+  const { email, password } = parsed.data;
 
   const supabase = await createClient();
   const origin = (await headers()).get("origin");

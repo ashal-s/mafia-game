@@ -2,26 +2,24 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { z } from "zod";
 
 export type ProfileState = {
   error?: string;
 };
 
-const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,20}$/;
+export const profileSchema = z.object({
+  username: z.string().trim().regex(/^[A-Za-z0-9_]{3,20}$/, "Username must be 3–20 characters using letters, numbers, or underscores."),
+  display_name: z.string().trim().max(50, "Display name must be 50 characters or fewer."),
+});
 
 export async function updateProfile(
   _prevState: ProfileState,
   formData: FormData,
 ): Promise<ProfileState> {
-  const username = String(formData.get("username") ?? "").trim();
-  const displayName = String(formData.get("display_name") ?? "").trim();
-
-  if (!USERNAME_PATTERN.test(username)) {
-    return {
-      error:
-        "Username must be 3–20 characters using letters, numbers, or underscores.",
-    };
-  }
+  const parsed = profileSchema.safeParse(Object.fromEntries(formData.entries()));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message };
+  const { username, display_name: displayName } = parsed.data;
 
   const supabase = await createClient();
   const {

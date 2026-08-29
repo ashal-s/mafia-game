@@ -12,6 +12,22 @@ import {
   nightActionForRole,
 } from "@/lib/night";
 import { evaluateWin, type WinAlignment } from "@/lib/win";
+import {
+  chatMessageSchema,
+  createGameSchema,
+  formDataValues,
+  gameIdSchema,
+  joinGameByIdSchema,
+  joinGameSchema,
+  mutePlayerSchema,
+  pauseGameSchema,
+  playerManagementSchema,
+  readyStatusSchema,
+  roleActionSchema,
+  roleLimitSchema,
+  validationMessage,
+  voteSchema,
+} from "./validation";
 
 export type FormState = { error?: string };
 
@@ -210,21 +226,6 @@ async function notifyPhaseStart(
 
 
 /**
- * Parses a configurable role limit. The sentinel string "unlimited" maps to
- * `null` (no limit); otherwise we expect a small non-negative integer and fall
- * back to the provided default when the value is missing or invalid.
- */
-function parseRoleLimit(
-  raw: FormDataEntryValue | null,
-  fallback: number,
-): number | null {
-  if (raw === "unlimited") return null;
-  const n = Number(raw);
-  if (Number.isInteger(n) && n >= 0 && n <= 99) return n;
-  return fallback;
-}
-
-/**
  * Ensures there is an authenticated user with a completed profile (username).
  * Redirects to login / profile setup otherwise. Never call inside try/catch —
  * `redirect()` works by throwing.
@@ -257,17 +258,10 @@ export async function createGame(
   formData: FormData,
 ): Promise<FormState> {
   const { supabase, user } = await requirePlayer();
-
-  const rawName = formData.get("name");
-  const name =
-    typeof rawName === "string" && rawName.trim().length > 0
-      ? rawName.trim().slice(0, 80)
-      : null;
-
-  const choice = formData.get("setup");
-  if (typeof choice !== "string" || choice.length === 0) {
-    return { error: "Choose a game setup." };
-  }
+  const input = createGameSchema.safeParse(formDataValues(formData));
+  if (!input.success) return { error: validationMessage(input.error) };
+  const name = input.data.name || null;
+  const choice = input.data.setup;
 
   let presetId: string | null = null;
   let minPlayers = 5;
@@ -281,8 +275,8 @@ export async function createGame(
   } = {};
 
   if (choice === "custom") {
-    const playerCount = Number(formData.get("players"));
-    if (!Number.isInteger(playerCount) || playerCount < 3 || playerCount > 30) {
+    const playerCount = input.data.players;
+    if (playerCount === undefined) {
       return { error: "Choose between 3 and 30 players for a custom game." };
     }
 
@@ -341,20 +335,22 @@ export async function createGame(
   // role is in play. `null` means unlimited.
   const roleConfig: NonNullable<typeof settingsObj.roleConfig> = {};
   if (formData.has("sniper_bullets")) {
-    roleConfig.sniper = {
-      bullets: parseRoleLimit(
-        formData.get("sniper_bullets"),
-        DEFAULT_SNIPER_BULLETS,
-      ),
-    };
+    const limit = roleLimitSchema.safeParse(formData.get("sniper_bullets"));
+    if (!limit.success) {
+      return {
+        error: "Sniper bullets must be between 0 and 99, or unlimited.",
+      };
+    }
+    roleConfig.sniper = { bullets: limit.data };
   }
   if (formData.has("healer_self_heals")) {
-    roleConfig.healer = {
-      selfHeals: parseRoleLimit(
-        formData.get("healer_self_heals"),
-        DEFAULT_HEALER_SELF_HEALS,
-      ),
-    };
+    const limit = roleLimitSchema.safeParse(formData.get("healer_self_heals"));
+    if (!limit.success) {
+      return {
+        error: "Healer self-heals must be between 0 and 99, or unlimited.",
+      };
+    }
+    roleConfig.healer = { selfHeals: limit.data };
   }
   // A game has one night per round, so it can never run more rounds than there
   // are players — cap bullets / self-heals to that ceiling (unlimited stays null).
@@ -428,14 +424,9 @@ export async function joinByCode(
   formData: FormData,
 ): Promise<FormState> {
   const { supabase, user } = await requirePlayer();
-
-  const rawCode = formData.get("code");
-  const code =
-    typeof rawCode === "string" ? rawCode.trim().toUpperCase() : "";
-
-  if (!code) {
-    return { error: "Enter an invite code." };
-  }
+  const input = joinGameSchema.safeParse(formDataValues(formData));
+  if (!input.success) return { error: validationMessage(input.error) };
+  const { code } = input.data;
 
   const { data: game } = await supabase
     .from("games")
@@ -465,17 +456,17 @@ export async function joinByCode(
 /** Used by the invite-link landing page's "Join game" button. */
 export async function joinGameById(formData: FormData): Promise<void> {
   const { supabase, user } = await requirePlayer();
-  const gameId = formData.get("game_id");
-  const code = formData.get("code");
-  if (typeof gameId !== "string" || !gameId) {
+  const input = joinGameByIdSchema.safeParse(formDataValues(formData));
+  if (!input.success) {
     redirect("/dashboard");
   }
+  const { game_id: gameId, code } = input.data;
 
   const { error } = await supabase
     .from("game_players")
     .insert({ game_id: gameId, user_id: user.id });
 
-  if (error && error.code !== "23505" && typeof code === "string") {
+  if (error && error.code !== "23505" && code) {
     redirect(`/join/${code}?error=${encodeURIComponent(error.message)}`);
   }
 
@@ -484,10 +475,9 @@ export async function joinGameById(formData: FormData): Promise<void> {
 
 export async function setReady(formData: FormData): Promise<void> {
   const { supabase, user } = await requirePlayer();
-  const gameId = formData.get("game_id");
-  if (typeof gameId !== "string") return;
-
-  const ready = formData.get("ready") === "true";
+  const input = readyStatusSchema.safeParse(formDataValues(formData));
+  if (!input.success) return;
+  const { game_id: gameId, ready } = input.data;
 
   await supabase
     .from("game_players")
@@ -500,9 +490,9 @@ export async function setReady(formData: FormData): Promise<void> {
 
 export async function removePlayer(formData: FormData): Promise<void> {
   const { supabase } = await requirePlayer();
-  const gameId = formData.get("game_id");
-  const playerId = formData.get("player_id");
-  if (typeof gameId !== "string" || typeof playerId !== "string") return;
+  const input = playerManagementSchema.safeParse(formDataValues(formData));
+  if (!input.success) return;
+  const { game_id: gameId, player_id: playerId } = input.data;
 
   // RLS restricts deletes to the host; never remove the host's own row.
   await supabase
@@ -517,8 +507,9 @@ export async function removePlayer(formData: FormData): Promise<void> {
 
 export async function startGame(formData: FormData): Promise<void> {
   const { supabase, user } = await requirePlayer();
-  const gameId = formData.get("game_id");
-  if (typeof gameId !== "string") return;
+  const input = gameIdSchema.safeParse(formDataValues(formData));
+  if (!input.success) return;
+  const gameId = input.data.game_id;
 
   const { data: game } = await supabase
     .from("games")
@@ -808,8 +799,9 @@ async function transitionPhase(
 
 export async function advancePhase(formData: FormData): Promise<void> {
   const { supabase, user } = await requirePlayer();
-  const gameId = formData.get("game_id");
-  if (typeof gameId !== "string") return;
+  const input = gameIdSchema.safeParse(formDataValues(formData));
+  if (!input.success) return;
+  const gameId = input.data.game_id;
 
   const { data: game } = await supabase
     .from("games")
@@ -889,11 +881,9 @@ export async function submitNightAction(
 ): Promise<FormState> {
   const { supabase, user } = await requirePlayer();
 
-  const gameId = formData.get("game_id");
-  const rawTarget = formData.get("target_id");
-  if (typeof gameId !== "string" || !gameId) {
-    return { error: "Missing game." };
-  }
+  const input = roleActionSchema.safeParse(formDataValues(formData));
+  if (!input.success) return { error: validationMessage(input.error) };
+  const { game_id: gameId, target_id: rawTarget } = input.data;
 
   const { data: game } = await supabase
     .from("games")
@@ -1033,11 +1023,9 @@ export async function submitVote(
 ): Promise<FormState> {
   const { supabase, user } = await requirePlayer();
 
-  const gameId = formData.get("game_id");
-  const rawTarget = formData.get("target_id");
-  if (typeof gameId !== "string" || !gameId) {
-    return { error: "Missing game." };
-  }
+  const input = voteSchema.safeParse(formDataValues(formData));
+  if (!input.success) return { error: validationMessage(input.error) };
+  const { game_id: gameId, target_id: rawTarget } = input.data;
 
   const { data: game } = await supabase
     .from("games")
@@ -1499,8 +1487,9 @@ async function processNight(
 
 export async function leaveGame(formData: FormData): Promise<void> {
   const { supabase, user } = await requirePlayer();
-  const gameId = formData.get("game_id");
-  if (typeof gameId !== "string") return;
+  const input = gameIdSchema.safeParse(formDataValues(formData));
+  if (!input.success) return;
+  const gameId = input.data.game_id;
 
   const { data: game } = await supabase
     .from("games")
@@ -1525,8 +1514,6 @@ export async function leaveGame(formData: FormData): Promise<void> {
   redirect("/dashboard");
 }
 
-const MAX_CHAT_LENGTH = 500;
-
 /**
  * Sends a chat message to a room. Room access (which player may post where, and
  * the mute/dead restrictions) is enforced by RLS via `private.can_post_chat_room`,
@@ -1538,23 +1525,9 @@ export async function sendChatMessage(
 ): Promise<FormState> {
   const { supabase, user } = await requirePlayer();
 
-  const gameId = formData.get("game_id");
-  const roomId = formData.get("room_id");
-  const rawBody = formData.get("body");
-  if (
-    typeof gameId !== "string" ||
-    !gameId ||
-    typeof roomId !== "string" ||
-    !roomId
-  ) {
-    return { error: "Missing chat room." };
-  }
-
-  const body = typeof rawBody === "string" ? rawBody.trim() : "";
-  if (!body) return { error: "Type a message first." };
-  if (body.length > MAX_CHAT_LENGTH) {
-    return { error: `Messages are limited to ${MAX_CHAT_LENGTH} characters.` };
-  }
+  const input = chatMessageSchema.safeParse(formDataValues(formData));
+  if (!input.success) return { error: validationMessage(input.error) };
+  const { game_id: gameId, room_id: roomId, body } = input.data;
 
   const { data: me } = await supabase
     .from("game_players")
@@ -1588,11 +1561,9 @@ export async function sendChatMessage(
 export async function toggleMute(formData: FormData): Promise<void> {
   const { supabase, user } = await requirePlayer();
 
-  const gameId = formData.get("game_id");
-  const playerId = formData.get("player_id");
-  if (typeof gameId !== "string" || typeof playerId !== "string") return;
-
-  const mute = formData.get("mute") === "true";
+  const input = mutePlayerSchema.safeParse(formDataValues(formData));
+  if (!input.success) return;
+  const { game_id: gameId, player_id: playerId, mute } = input.data;
 
   const { data: game } = await supabase
     .from("games")
@@ -1628,10 +1599,9 @@ export async function toggleMute(formData: FormData): Promise<void> {
 export async function setGamePause(formData: FormData): Promise<void> {
   const { supabase, user } = await requirePlayer();
 
-  const gameId = formData.get("game_id");
-  if (typeof gameId !== "string") return;
-
-  const pause = formData.get("pause") === "true";
+  const input = pauseGameSchema.safeParse(formDataValues(formData));
+  if (!input.success) return;
+  const { game_id: gameId, pause } = input.data;
 
   const { data: game } = await supabase
     .from("games")
@@ -1681,8 +1651,9 @@ export async function setGamePause(formData: FormData): Promise<void> {
 export async function endGameByHost(formData: FormData): Promise<void> {
   const { supabase, user } = await requirePlayer();
 
-  const gameId = formData.get("game_id");
-  if (typeof gameId !== "string") return;
+  const input = gameIdSchema.safeParse(formDataValues(formData));
+  if (!input.success) return;
+  const gameId = input.data.game_id;
 
   const { data: game } = await supabase
     .from("games")
