@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "rm -rf .test-dist; tsc --module commonjs --moduleResolution node --target es2022 --esModuleInterop --outDir .test-dist tests/game-permissions.test.ts lib/game-permissions.ts && node --test .test-dist/tests/game-permissions.test.js; status=$?; rm -rf .test-dist; exit $status"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
