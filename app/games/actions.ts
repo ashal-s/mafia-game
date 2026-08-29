@@ -1734,7 +1734,7 @@ export async function setGamePause(formData: FormData): Promise<void> {
 
   const { data: game } = await supabase
     .from("games")
-    .select("id, host_id, status")
+    .select("id, host_id, status, is_paused")
     .eq("id", gameId)
     .maybeSingle();
   try {
