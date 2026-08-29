@@ -272,8 +272,6 @@ export async function createGame(
 
   const creationLimit = await consumeRateLimit(supabase, {
     action: "game_create",
-    limit: 3,
-    windowSeconds: 60 * 60,
   });
   if (!creationLimit.allowed) return { error: creationLimit.message };
 
@@ -447,8 +445,6 @@ export async function joinByCode(
 
   const joinLimit = await consumeRateLimit(supabase, {
     action: "game_join",
-    limit: 8,
-    windowSeconds: 5 * 60,
   });
   if (!joinLimit.allowed) return { error: joinLimit.message };
 
@@ -488,8 +484,6 @@ export async function joinGameById(formData: FormData): Promise<void> {
 
   const joinLimit = await consumeRateLimit(supabase, {
     action: "game_join",
-    limit: 8,
-    windowSeconds: 5 * 60,
   });
   if (!joinLimit.allowed && typeof code === "string") {
     redirect(`/join/${code}?error=${encodeURIComponent(joinLimit.message)}`);
@@ -546,8 +540,6 @@ export async function startGame(formData: FormData): Promise<void> {
 
   const hostLimit = await consumeRateLimit(supabase, {
     action: "host_control",
-    limit: 4,
-    windowSeconds: 5,
     scope: gameId,
   });
   if (!hostLimit.allowed) {
@@ -847,8 +839,6 @@ export async function advancePhase(formData: FormData): Promise<void> {
 
   const hostLimit = await consumeRateLimit(supabase, {
     action: "host_control",
-    limit: 4,
-    windowSeconds: 5,
     scope: gameId,
   });
   if (!hostLimit.allowed) {
@@ -941,8 +931,6 @@ export async function submitNightAction(
 
   const actionLimit = await consumeRateLimit(supabase, {
     action: "role_action",
-    limit: 4,
-    windowSeconds: 10,
     scope: gameId,
   });
   if (!actionLimit.allowed) return { error: actionLimit.message };
@@ -1093,8 +1081,6 @@ export async function submitVote(
 
   const voteLimit = await consumeRateLimit(supabase, {
     action: "vote_change",
-    limit: 5,
-    windowSeconds: 10,
     scope: gameId,
   });
   if (!voteLimit.allowed) return { error: voteLimit.message };
@@ -1693,8 +1679,6 @@ export async function setGamePause(formData: FormData): Promise<void> {
 
   const hostLimit = await consumeRateLimit(supabase, {
     action: "host_control",
-    limit: 4,
-    windowSeconds: 5,
     scope: gameId,
   });
   if (!hostLimit.allowed) {
@@ -1756,8 +1740,6 @@ export async function endGameByHost(formData: FormData): Promise<void> {
 
   const hostLimit = await consumeRateLimit(supabase, {
     action: "host_control",
-    limit: 4,
-    windowSeconds: 5,
     scope: gameId,
   });
   if (!hostLimit.allowed) {

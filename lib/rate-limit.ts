@@ -3,9 +3,12 @@ import type { createClient } from "@/lib/supabase/server";
 type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
 
 export type RateLimitPolicy = {
-  action: string;
-  limit: number;
-  windowSeconds: number;
+  action:
+    | "game_create"
+    | "game_join"
+    | "host_control"
+    | "role_action"
+    | "vote_change";
   scope?: string;
 };
 
@@ -24,8 +27,6 @@ export async function consumeRateLimit(
 ): Promise<RateLimitResult> {
   const { data, error } = await supabase.rpc("consume_rate_limit", {
     p_action: policy.action,
-    p_limit: policy.limit,
-    p_window_seconds: policy.windowSeconds,
     p_scope: policy.scope ?? "global",
   });
 
