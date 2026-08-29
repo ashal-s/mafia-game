@@ -33,14 +33,16 @@ drop index if exists public.game_players_role_id_idx;
 alter table public.game_players drop column if exists role_id;
 
 -------------------------------------------------------------------------------
--- Profiles: private account data is owner-only.
+-- Profiles contain only public identity data used to label players throughout
+-- the lobby and game. Private account data remains in auth.users.
 -------------------------------------------------------------------------------
 
 alter table public.profiles enable row level security;
 drop policy if exists "Profiles are viewable by authenticated users" on public.profiles;
-create policy "Users can read their own profile"
+drop policy if exists "Users can read their own profile" on public.profiles;
+create policy "Profiles are viewable by authenticated users"
   on public.profiles for select to authenticated
-  using (id = (select auth.uid()));
+  using (true);
 
 -------------------------------------------------------------------------------
 -- Games: no unaffiliated lobby discovery through the base table.

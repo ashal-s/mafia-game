@@ -42,7 +42,7 @@ insert into public.notifications (user_id, game_id, type, title) values
 
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000002', true);
-select is((select count(*) from public.profiles), 1::bigint, 'player reads only own profile');
+select is((select count(*) from public.profiles), 3::bigint, 'player reads public profiles for all players');
 select is((select count(*) from public.games), 1::bigint, 'player reads joined game only');
 select is((select count(*) from public.game_players), 2::bigint, 'player reads joined roster');
 select is((select count(*) from public.game_player_roles), 1::bigint, 'town player reads only own role');
