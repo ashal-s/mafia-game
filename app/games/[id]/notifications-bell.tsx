@@ -13,8 +13,11 @@ export type NotificationRow = {
 };
 
 const TYPE_DOT: Record<string, string> = {
+  phase_started: "bg-sky-400",
   phase: "bg-sky-400",
   action_required: "bg-amber-400",
+  voting_started: "bg-amber-400",
+  killed: "bg-red-400",
   player_killed: "bg-red-400",
   eliminated: "bg-red-400",
   investigation: "bg-violet-400",

@@ -10,11 +10,13 @@ import {
   type RoundResults,
 } from "./role-reveal";
 import type { ActivityEntry } from "./activity-log";
+import type { TimelineEvent } from "./game-timeline";
 import type { NightActionProps } from "./night-actions";
 import type { VoteActionProps } from "./vote-actions";
 import type { ChatRoomInfo } from "./chat";
 import type { HostPlayer } from "./host-dashboard";
 import { GameOver } from "./game-over";
+import type { ReconnectState } from "./reconnect-status";
 import {
   DEFAULT_HEALER_SELF_HEALS,
   DEFAULT_SNIPER_BULLETS,
@@ -42,6 +44,64 @@ const PLAYER_SELECT =
 
 const ROLE_SELECT =
   "player_id, user_id, alignment, role:roles(key, name, description, ability), profile:profiles(username, display_name)";
+
+type EventRow = {
+  id: string;
+  event_type: string;
+  data: unknown;
+  created_at: string;
+  visibility: string;
+  phase: { day_number: number; phase_type: string } | { day_number: number; phase_type: string }[] | null;
+};
+
+function timelineEvent(row: EventRow, names: Map<string, string>): TimelineEvent | null {
+  const data = (row.data && typeof row.data === "object" && !Array.isArray(row.data)
+    ? row.data
+    : {}) as Record<string, unknown>;
+  const phase = firstOf(row.phase);
+  const day = phase?.day_number ?? (typeof data.day_number === "number" ? data.day_number : 1);
+  const phaseType = phase?.phase_type ?? (typeof data.phase_type === "string" ? data.phase_type : "game");
+  const playerName = (id: unknown) => typeof id === "string" ? (names.get(id) ?? "A player") : "A player";
+  const base = { id: row.id, at: row.created_at, day, phase: phaseType, hostOnly: row.visibility === "host" };
+
+  switch (row.event_type) {
+    case "phase_started":
+      return { ...base, type: "phase", title: "Day started", detail: `${phaseType === "night" ? "Night" : "The first phase"} began.` };
+    case "phase_changed": {
+      const to = typeof data.to === "string" ? data.to : phaseType;
+      const from = typeof data.from === "string" ? data.from : null;
+      const title = to === "voting" ? "Voting started" : from === "night" ? "Night ended" : to === "night" ? "New day started" : `${to.charAt(0).toUpperCase() + to.slice(1)} started`;
+      return { ...base, phase: to, type: to === "voting" ? "vote" : "phase", title, detail: `The game moved into the ${to} phase.` };
+    }
+    case "player_eliminated": {
+      const name = playerName(data.player_id);
+      const byVote = data.cause === "vote";
+      return { ...base, type: "death", title: `${name} was removed`, detail: byVote ? `${name} was eliminated by the town vote.` : `${name} did not survive the night.` };
+    }
+    case "voting_resolved": {
+      const eliminated = data.eliminated;
+      const detail = typeof eliminated === "string"
+        ? `${playerName(eliminated)} received the deciding vote and was eliminated.`
+        : data.tie ? "The vote was tied. No player was eliminated." : "No player was eliminated by the vote.";
+      return { ...base, type: "vote", title: "Voting result calculated", detail };
+    }
+    case "voting_tally": {
+      const tally = data.tally && typeof data.tally === "object" && !Array.isArray(data.tally) ? data.tally as Record<string, unknown> : {};
+      const detail = Object.entries(tally).map(([id, votes]) => `${playerName(id)}: ${votes}`).join(" · ") || "No votes were cast.";
+      return { ...base, type: "vote", title: "Detailed vote tally", detail };
+    }
+    case "night_resolved":
+      return { ...base, type: "phase", title: "Night result calculated", detail: Array.isArray(data.deaths) && data.deaths.length ? `${data.deaths.length} player${data.deaths.length === 1 ? "" : "s"} did not survive.` : "Everyone survived the night." };
+    case "player_saved":
+      return { ...base, type: "phase", title: "An attack was prevented", detail: `${playerName(data.player_id)} was protected from an attack.` };
+    case "game_ended": {
+      const winner = data.winner_alignment === "mafia" ? "The Mafia" : data.winner_alignment === "town" ? "The Town" : "No side";
+      return { ...base, phase: "game end", type: "end", title: "Game ended", detail: `${winner} won the game.` };
+    }
+    default:
+      return null;
+  }
+}
 
 export default async function GamePage({
   params,
@@ -233,6 +293,15 @@ export default async function GamePage({
       muted: p.is_muted,
     }));
 
+    const { data: eventRows } = await supabase
+      .from("game_events")
+      .select("id, event_type, data, created_at, visibility, phase:game_phases(day_number, phase_type)")
+      .eq("game_id", id)
+      .order("created_at", { ascending: true });
+    const timeline = (eventRows ?? [])
+      .map((event) => timelineEvent(event as EventRow, nameByPlayerId))
+      .filter((event): event is TimelineEvent => event !== null);
+
     // Host dashboard: full per-player view (role, alignment, live status). Only
     // built for the host — RLS already exposes every role to them.
     const roleByPlayerId = new Map(
@@ -249,6 +318,7 @@ export default async function GamePage({
             roleName: firstOf(rr?.role)?.name ?? "—",
             alignment,
             alive: p.status === "alive",
+            status: p.status,
             isHost: p.is_host,
             muted: p.is_muted,
             ready: p.is_ready,
@@ -263,6 +333,18 @@ export default async function GamePage({
     const selfStatus = selfPlayer?.status ?? null;
     const selfMuted = Boolean(selfPlayer?.is_muted);
     const selfIsMafia = selfRow?.alignment === "mafia";
+
+    // The most recent non-chat notification summarizes what changed while the
+    // player was away. Owner-only RLS ensures this can never expose an alert
+    // belonging to somebody else.
+    const { data: latestNotification } = await supabase
+      .from("notifications")
+      .select("type, title, body, created_at")
+      .eq("game_id", id)
+      .neq("type", "chat")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     const namesById: Record<string, string> = {};
     for (const p of allPlayers ?? []) {
@@ -348,6 +430,23 @@ export default async function GamePage({
         hasVoted: Boolean(myVote),
         initialVotes: voteRows ?? [],
       };
+    }
+
+    // Resolve one unambiguous return state. More restrictive states win: a
+    // paused or eliminated player should never be told to submit an action.
+    let reconnectState: ReconnectState = "waiting";
+    if (game.is_paused) {
+      reconnectState = "paused";
+    } else if (selfStatus === "dead") {
+      reconnectState = "dead";
+    } else if (night) {
+      reconnectState = night.hasSubmitted
+        ? "already_submitted"
+        : "action_required";
+    } else if (voting?.canVote) {
+      reconnectState = voting.hasVoted
+        ? "already_submitted"
+        : "action_required";
     }
 
     // Results UI: surface the outcome of the day's vote during the results phase.
@@ -519,6 +618,7 @@ export default async function GamePage({
         results={results}
         roster={roster}
         activityLog={activityLog}
+        timeline={timeline}
         selfAlive={selfStatus === "alive"}
         chat={{
           gameId: game.id,
@@ -527,13 +627,15 @@ export default async function GamePage({
           rooms: chatRooms,
           namesById,
         }}
+        reconnectState={reconnectState}
+        latestAlert={latestNotification ?? null}
       />
     );
   }
 
   // Completed: reveal every role and the winning side.
   if (game.status === "completed") {
-    const [{ data: roleRows }, { data: players }] = await Promise.all([
+    const [{ data: roleRows }, { data: players }, { data: eventRows }] = await Promise.all([
       supabase.from("game_player_roles").select(ROLE_SELECT).eq("game_id", id),
       supabase
         .from("game_players")
@@ -542,6 +644,11 @@ export default async function GamePage({
         )
         .eq("game_id", id)
         .order("seat", { ascending: true }),
+      supabase
+        .from("game_events")
+        .select("id, event_type, data, created_at, visibility, phase:game_phases(day_number, phase_type)")
+        .eq("game_id", id)
+        .order("created_at", { ascending: true }),
     ]);
 
     const statusByUser = new Map(
@@ -555,12 +662,18 @@ export default async function GamePage({
       alive: statusByUser.get(r.user_id) === "alive",
       isSelf: r.user_id === user.id,
     }));
+    const completedNames = new Map((players ?? []).map((p) => [p.id, profileName(p.profile)]));
+    const timeline = (eventRows ?? [])
+      .map((event) => timelineEvent(event as EventRow, completedNames))
+      .filter((event): event is TimelineEvent => event !== null);
 
     return (
       <GameOver
         gameName={game.name}
         winner={game.winner_alignment}
         reveal={reveal}
+        timeline={timeline}
+        isHost={isHost}
       />
     );
   }
