@@ -160,6 +160,7 @@ export type Database = {
           id: string
           phase_number: number
           phase_type: Database["public"]["Enums"]["game_phase_type"]
+          processing_started_at: string | null
           started_at: string | null
           status: Database["public"]["Enums"]["game_phase_status"]
         }
@@ -172,6 +173,7 @@ export type Database = {
           id?: string
           phase_number: number
           phase_type: Database["public"]["Enums"]["game_phase_type"]
+          processing_started_at?: string | null
           started_at?: string | null
           status?: Database["public"]["Enums"]["game_phase_status"]
         }
@@ -184,6 +186,7 @@ export type Database = {
           id?: string
           phase_number?: number
           phase_type?: Database["public"]["Enums"]["game_phase_type"]
+          processing_started_at?: string | null
           started_at?: string | null
           status?: Database["public"]["Enums"]["game_phase_status"]
         }
