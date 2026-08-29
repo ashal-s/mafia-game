@@ -718,7 +718,8 @@ export async function startGame(formData: FormData): Promise<void> {
 async function transitionPhase(
   supabase: DbClient,
   gameId: string,
-): Promise<{ ended: boolean; error?: string }> {
+  expectedPhaseId?: string,
+): Promise<{ ended: boolean; skipped?: boolean; error?: string }> {
   const { data: current } = await supabase
     .from("game_phases")
     .select("id, phase_number, phase_type, day_number")
@@ -728,14 +729,32 @@ async function transitionPhase(
     .limit(1)
     .maybeSingle();
 
+  if (!current || (expectedPhaseId && current.id !== expectedPhaseId)) {
+    return { ended: false, skipped: true };
+  }
+
+  // Claim the phase before resolving any actions. The conditional update is an
+  // atomic compare-and-set: overlapping cron invocations (or a host clicking
+  // advance at the same time) cannot both process the same phase.
+  const { data: claimed, error: claimError } = await supabase
+    .from("game_phases")
+    .update({ status: "processing" })
+    .eq("id", current.id)
+    .eq("status", "active")
+    .select("id")
+    .maybeSingle();
+
+  if (claimError) return { ended: false, error: claimError.message };
+  if (!claimed) return { ended: false, skipped: true };
+
   const now = new Date();
-  const currentType = (current?.phase_type ?? "results") as PhaseType;
-  const currentDay = current?.day_number ?? 1;
+  const currentType = current.phase_type as PhaseType;
+  const currentDay = current.day_number;
 
   const nextType = nextPhaseOf(currentType);
   // A full cycle completes when results rolls back to night — bump the day.
   const nextDay = currentType === "results" ? currentDay + 1 : currentDay;
-  const nextNumber = (current?.phase_number ?? 0) + 1;
+  const nextNumber = current.phase_number + 1;
   const endsAt = new Date(
     now.getTime() + PHASE_DURATIONS_SECONDS[nextType] * 1000,
   );
@@ -781,6 +800,14 @@ async function transitionPhase(
     .single();
 
   if (nextError || !next) {
+    // Resolution could not finish opening the successor. Release the claim so
+    // a later cron tick or host recovery action can retry instead of leaving
+    // the game permanently stuck in `processing`.
+    await supabase
+      .from("game_phases")
+      .update({ status: "active" })
+      .eq("id", current.id)
+      .eq("status", "processing");
     return { ended: false, error: nextError?.message ?? "phase" };
   }
 
@@ -833,7 +860,7 @@ export async function advancePhase(formData: FormData): Promise<void> {
 /**
  * Server-side auto-advance: finds every in-progress, non-paused game whose
  * active phase has passed its scheduled `ends_at` and advances it. Driven by the
- * Supabase pg_cron route (`/api/cron/advance-phases`) so games keep moving even when
+ * Vercel Cron route (`/api/cron/advance-phases`) so games keep moving even when
  * every player's phone is locked and their PWA is suspended.
  *
  * Runs with the service-role client (bypasses RLS) since there is no logged-in
@@ -845,6 +872,7 @@ export async function autoAdvanceExpiredPhases(): Promise<{
   scanned: number;
   advanced: number;
   ended: number;
+  skipped: number;
   errors: number;
 }> {
   const admin = createAdminClient();
@@ -852,7 +880,7 @@ export async function autoAdvanceExpiredPhases(): Promise<{
 
   const { data: rows, error } = await admin
     .from("game_phases")
-    .select("game_id, ends_at, game:games!inner(status, is_paused)")
+    .select("id, game_id, ends_at, game:games!inner(status, is_paused)")
     .eq("status", "active")
     .not("ends_at", "is", null)
     .lte("ends_at", nowIso)
@@ -860,19 +888,28 @@ export async function autoAdvanceExpiredPhases(): Promise<{
     .eq("game.is_paused", false);
 
   if (error || !rows) {
-    return { scanned: 0, advanced: 0, ended: 0, errors: error ? 1 : 0 };
+    return {
+      scanned: 0,
+      advanced: 0,
+      ended: 0,
+      skipped: 0,
+      errors: error ? 1 : 0,
+    };
   }
-
-  // De-dupe defensively in case a game somehow has more than one active phase.
-  const gameIds = Array.from(new Set(rows.map((r) => r.game_id)));
 
   let advanced = 0;
   let ended = 0;
+  let skipped = 0;
   let errors = 0;
-  for (const gameId of gameIds) {
+  for (const phase of rows) {
     try {
-      const result = await transitionPhase(admin as unknown as DbClient, gameId);
+      const result = await transitionPhase(
+        admin as unknown as DbClient,
+        phase.game_id,
+        phase.id,
+      );
       if (result.error) errors++;
+      else if (result.skipped) skipped++;
       else if (result.ended) ended++;
       else advanced++;
     } catch {
@@ -880,7 +917,7 @@ export async function autoAdvanceExpiredPhases(): Promise<{
     }
   }
 
-  return { scanned: gameIds.length, advanced, ended, errors };
+  return { scanned: rows.length, advanced, ended, skipped, errors };
 }
 
 export async function submitNightAction(

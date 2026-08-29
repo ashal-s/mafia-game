@@ -7,20 +7,23 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * HTTP entrypoint that advances any game whose active phase has expired.
+ * Vercel Cron entrypoint that advances any game whose active phase has expired.
  *
- * Invoked every minute by Supabase pg_cron + pg_net (see migration
- * `phase_advance_pg_cron`). The scheduler POSTs here with
- * `Authorization: Bearer <CRON_SECRET>`, which must match the `cron_secret`
- * value stored in Supabase Vault and `CRON_SECRET` in Vercel.
+ * Vercel sends `Authorization: Bearer <CRON_SECRET>` when the project has a
+ * CRON_SECRET. The schedule is configured in `vercel.json`.
  */
 async function handle(request: Request): Promise<Response> {
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  if (!secret) {
+    return NextResponse.json(
+      { error: "Cron is not configured" },
+      { status: 503 },
+    );
+  }
+
+  const auth = request.headers.get("authorization");
+  if (auth !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {

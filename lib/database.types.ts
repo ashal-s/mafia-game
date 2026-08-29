@@ -797,7 +797,7 @@ export type Database = {
     }
     Enums: {
       chat_room_type: "town" | "mafia" | "dead" | "system"
-      game_phase_status: "pending" | "active" | "completed"
+      game_phase_status: "pending" | "active" | "processing" | "completed"
       game_phase_type: "day" | "night" | "discussion" | "voting" | "results"
       game_player_status: "alive" | "dead" | "left"
       game_status: "lobby" | "in_progress" | "completed" | "cancelled"
@@ -930,7 +930,7 @@ export const Constants = {
   public: {
     Enums: {
       chat_room_type: ["town", "mafia", "dead", "system"],
-      game_phase_status: ["pending", "active", "completed"],
+      game_phase_status: ["pending", "active", "processing", "completed"],
       game_phase_type: ["day", "night", "discussion", "voting", "results"],
       game_player_status: ["alive", "dead", "left"],
       game_status: ["lobby", "in_progress", "completed", "cancelled"],

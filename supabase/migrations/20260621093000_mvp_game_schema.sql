@@ -31,7 +31,7 @@ do $$ begin
 exception when duplicate_object then null; end $$;
 
 do $$ begin
-  create type public.game_phase_status as enum ('pending', 'active', 'completed');
+  create type public.game_phase_status as enum ('pending', 'active', 'processing', 'completed');
 exception when duplicate_object then null; end $$;
 
 do $$ begin
