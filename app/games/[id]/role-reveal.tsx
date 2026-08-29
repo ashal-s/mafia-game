@@ -13,6 +13,11 @@ import {
 } from "@/lib/night";
 
 import { ActivityLog, type ActivityEntry } from "./activity-log";
+import {
+  ReconnectStatus,
+  type LatestAlert,
+  type ReconnectState,
+} from "./reconnect-status";
 
 export type RosterEntry = {
   id: string;
@@ -110,6 +115,8 @@ export function RoleReveal({
   activityLog,
   selfAlive = true,
   chat,
+  reconnectState,
+  latestAlert,
 }: {
   gameId: string;
   gameName: string | null;
@@ -127,6 +134,8 @@ export function RoleReveal({
   activityLog?: ActivityEntry[];
   selfAlive?: boolean;
   chat?: ChatProps | null;
+  reconnectState: ReconnectState;
+  latestAlert: LatestAlert;
 }) {
   const self = rows.find((r) => r.user_id === currentUserId);
   const selfRole = self ? one(self.role) : null;
@@ -174,6 +183,8 @@ export function RoleReveal({
           initialPhase={phase ?? null}
           paused={Boolean(isPaused)}
         />
+
+        <ReconnectStatus state={reconnectState} latestAlert={latestAlert} />
 
         {isPaused ? (
           <div className="mt-4 rounded-xl border border-amber-800/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
