@@ -1616,14 +1616,6 @@ export async function sendChatMessage(
     return { error: `Messages are limited to ${MAX_CHAT_LENGTH} characters.` };
   }
 
-  const chatLimit = await consumeRateLimit(supabase, {
-    action: "chat_message",
-    limit: 1,
-    windowSeconds: 2,
-    scope: gameId,
-  });
-  if (!chatLimit.allowed) return { error: chatLimit.message };
-
   const { data: me } = await supabase
     .from("game_players")
     .select("id")

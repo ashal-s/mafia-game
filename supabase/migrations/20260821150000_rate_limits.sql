@@ -64,3 +64,62 @@ $$;
 revoke all on table public.rate_limit_counters from anon, authenticated;
 revoke all on function public.consume_rate_limit(text, integer, integer, text) from public;
 grant execute on function public.consume_rate_limit(text, integer, integer, text) to authenticated;
+
+-- Chat writes are also available through the Data API, so enforcing this limit
+-- only in the Server Action would allow clients to bypass it. Keep the policy
+-- fixed here and consume the bucket in the same transaction as every insert.
+create or replace function private.enforce_chat_message_rate_limit()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_now timestamptz := clock_timestamp();
+  v_counter public.rate_limit_counters%rowtype;
+  v_window_seconds constant integer := 2;
+begin
+  -- System messages are written by trusted database code and have no sender.
+  if new.sender_id is null then
+    return new;
+  end if;
+
+  if v_user_id is null then
+    raise exception using
+      errcode = '42501',
+      message = 'Authentication required';
+  end if;
+
+  insert into public.rate_limit_counters as counters (
+    user_id, action, scope, window_started_at, attempt_count
+  ) values (
+    v_user_id, 'chat_message', new.game_id::text, v_now, 1
+  )
+  on conflict (user_id, action, scope) do update
+  set window_started_at = case
+        when counters.window_started_at
+          + make_interval(secs => v_window_seconds) <= v_now
+        then v_now else counters.window_started_at end,
+      attempt_count = case
+        when counters.window_started_at
+          + make_interval(secs => v_window_seconds) <= v_now
+        then 1 else counters.attempt_count + 1 end
+  returning * into v_counter;
+
+  if v_counter.attempt_count > 1 then
+    raise exception using
+      errcode = 'P0001',
+      message = 'Chat messages are limited to one every 2 seconds';
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function private.enforce_chat_message_rate_limit() from public;
+
+drop trigger if exists enforce_chat_message_rate_limit on public.chat_messages;
+create trigger enforce_chat_message_rate_limit
+  before insert on public.chat_messages
+  for each row execute function private.enforce_chat_message_rate_limit();
