@@ -107,6 +107,7 @@ export type Database = {
           game_id: string
           id: string
           phase_id: string | null
+          visibility: string
         }
         Insert: {
           actor_id?: string | null
@@ -116,6 +117,7 @@ export type Database = {
           game_id: string
           id?: string
           phase_id?: string | null
+          visibility?: string
         }
         Update: {
           actor_id?: string | null
@@ -125,6 +127,7 @@ export type Database = {
           game_id?: string
           id?: string
           phase_id?: string | null
+          visibility?: string
         }
         Relationships: [
           {

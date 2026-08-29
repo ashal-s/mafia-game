@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { AppHeader } from "@/components/app-header";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentUserWithProfile } from "@/lib/profile";
 import { CreateGameForm } from "./create-game-form";
@@ -30,17 +31,14 @@ export default async function NewGamePage() {
 
   return (
     <div className="flex flex-1 flex-col bg-transparent text-zinc-100">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
-        <Link href="/dashboard" className="text-lg font-bold tracking-tight text-red-500">
-          Mafia
-        </Link>
+      <AppHeader>
         <Link
           href="/dashboard"
           className="text-sm font-medium text-zinc-400 transition-colors hover:text-zinc-200"
         >
           Back to dashboard
         </Link>
-      </header>
+      </AppHeader>
 
       <main className="mx-auto w-full max-w-lg flex-1 px-6 py-12">
         <h1 className="text-2xl font-semibold text-zinc-50">Create a game</h1>

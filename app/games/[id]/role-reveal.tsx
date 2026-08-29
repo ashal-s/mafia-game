@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AppHeader } from "@/components/app-header";
 import { PhaseBar, type PhaseRow } from "./phase-bar";
 import { NightActions, type NightActionProps } from "./night-actions";
 import { VoteActions, type VoteActionProps } from "./vote-actions";
@@ -13,6 +14,12 @@ import {
 } from "@/lib/night";
 
 import { ActivityLog, type ActivityEntry } from "./activity-log";
+import {
+  ReconnectStatus,
+  type LatestAlert,
+  type ReconnectState,
+} from "./reconnect-status";
+import { GameTimeline, type TimelineEvent } from "./game-timeline";
 
 export type RosterEntry = {
   id: string;
@@ -108,8 +115,11 @@ export function RoleReveal({
   results,
   roster,
   activityLog,
+  timeline,
   selfAlive = true,
   chat,
+  reconnectState,
+  latestAlert,
 }: {
   gameId: string;
   gameName: string | null;
@@ -125,8 +135,11 @@ export function RoleReveal({
   results?: RoundResults;
   roster?: RosterEntry[];
   activityLog?: ActivityEntry[];
+  timeline?: TimelineEvent[];
   selfAlive?: boolean;
   chat?: ChatProps | null;
+  reconnectState: ReconnectState;
+  latestAlert: LatestAlert;
 }) {
   const self = rows.find((r) => r.user_id === currentUserId);
   const selfRole = self ? one(self.role) : null;
@@ -151,21 +164,29 @@ export function RoleReveal({
   const mafiaTeammates = rows.filter(
     (r) => r.user_id !== currentUserId && r.alignment === "mafia",
   );
+  const hasDeadChat = Boolean(chat?.rooms.some((room) => room.type === "dead"));
+
+  const playerPhaseState = !selfAlive
+    ? "dead"
+    : night
+      ? night.hasSubmitted
+        ? "submitted"
+        : "action"
+      : voting?.canVote
+        ? voting.hasVoted
+          ? "submitted"
+          : "action"
+        : "waiting";
 
   return (
     <div className="flex flex-1 flex-col bg-transparent text-zinc-100">
-      <header className="relative z-50 flex items-center justify-between border-b border-zinc-800 px-6 py-4">
-        <Link href="/dashboard" className="text-lg font-bold tracking-tight text-red-500">
-          Mafia
-        </Link>
-        <div className="flex items-center gap-3">
-          <span className="hidden text-xs font-medium uppercase tracking-widest text-zinc-500 sm:inline">
-            {gameName || "Mafia game"}
-          </span>
-          <NotificationOptIn />
-          <NotificationsBell userId={currentUserId} gameId={gameId} />
-        </div>
-      </header>
+      <AppHeader>
+        <span className="hidden text-xs font-medium uppercase tracking-widest text-zinc-500 sm:inline">
+          {gameName || "Mafia game"}
+        </span>
+        <NotificationOptIn />
+        <NotificationsBell userId={currentUserId} gameId={gameId} />
+      </AppHeader>
 
       <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-10">
         <PhaseBar
@@ -173,7 +194,10 @@ export function RoleReveal({
           isHost={isHost}
           initialPhase={phase ?? null}
           paused={Boolean(isPaused)}
+          playerState={playerPhaseState}
         />
+
+        <ReconnectStatus state={reconnectState} latestAlert={latestAlert} />
 
         {isPaused ? (
           <div className="mt-4 rounded-xl border border-amber-800/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
@@ -189,7 +213,8 @@ export function RoleReveal({
             </p>
             <p className="mt-2 text-sm text-red-100">
               You were eliminated and can no longer vote or use night actions. You
-              can still read town chat and speak in the graveyard.
+              can still read town chat and follow public game events.
+              {hasDeadChat ? " You can also speak in the graveyard." : ""}
             </p>
           </div>
         ) : null}
@@ -282,6 +307,8 @@ export function RoleReveal({
         {activityLog && activityLog.length > 0 ? (
           <ActivityLog entries={activityLog} />
         ) : null}
+
+        {timeline ? <GameTimeline events={timeline} isHost={isHost} /> : null}
 
         {chat ? <Chat {...chat} /> : null}
 
