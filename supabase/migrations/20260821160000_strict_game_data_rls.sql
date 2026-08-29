@@ -61,14 +61,41 @@ create policy "Games are visible to members, host, or while joinable"
   );
 
 -------------------------------------------------------------------------------
--- Players: members may see the roster, but only a host may mutate player state.
--- A joining user can create only a clean row for themself.
+-- Players: members may see the roster. Players may update only their own ready
+-- flag, while hosts retain control over moderation and gameplay state. A
+-- joining user can create only a clean row for themself.
 -------------------------------------------------------------------------------
 
 alter table public.game_players enable row level security;
 drop policy if exists "Users can add themselves to a game" on public.game_players;
 drop policy if exists "Players or host can update player rows" on public.game_players;
 drop policy if exists "Players can leave or host can remove players" on public.game_players;
+
+create or replace function private.restrict_player_self_update()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if old.user_id = (select auth.uid())
+     and not private.is_game_host(old.game_id)
+     and (to_jsonb(new) - 'is_ready') is distinct from
+         (to_jsonb(old) - 'is_ready') then
+    raise insufficient_privilege
+      using message = 'Players may only update their own readiness state';
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke execute on function private.restrict_player_self_update() from public, anon, authenticated;
+
+drop trigger if exists restrict_player_self_update on public.game_players;
+create trigger restrict_player_self_update
+  before update on public.game_players
+  for each row execute function private.restrict_player_self_update();
 
 create policy "Users can join as themselves"
   on public.game_players for insert to authenticated
@@ -87,6 +114,11 @@ create policy "Hosts can update players"
   on public.game_players for update to authenticated
   using (private.is_game_host(game_id))
   with check (private.is_game_host(game_id));
+
+create policy "Players can update their own readiness"
+  on public.game_players for update to authenticated
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));
 
 create policy "Players can leave and hosts can remove players"
   on public.game_players for delete to authenticated

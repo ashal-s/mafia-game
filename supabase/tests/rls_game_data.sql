@@ -1,7 +1,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select plan(19);
+select plan(20);
 
 -- Fixed IDs make failures readable. Fixtures are inserted as the database
 -- owner, then assertions run as players, a prospective invitee, or the host.
@@ -52,6 +52,23 @@ select is((select count(*) from public.role_actions), 0::bigint, 'town player ca
 select is((select count(*) from public.chat_rooms), 1::bigint, 'town player cannot read mafia room');
 select is((select count(*) from public.chat_messages), 1::bigint, 'town player cannot read mafia message');
 select is((select count(*) from public.notifications), 1::bigint, 'town player reads only own notification');
+select lives_ok(
+  $$update public.game_players set is_ready = true
+    where id = '30000000-0000-0000-0000-000000000002'$$,
+  'player can update their own readiness'
+);
+select ok(
+  (select is_ready from public.game_players
+   where id = '30000000-0000-0000-0000-000000000002'),
+  'player readiness update is persisted'
+);
+select throws_ok(
+  $$update public.game_players set is_muted = true
+    where id = '30000000-0000-0000-0000-000000000002'$$,
+  '42501',
+  'Players may only update their own readiness state',
+  'player cannot update their own moderation state'
+);
 
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000003', true);
 select is((select count(*) from public.game_player_roles), 1::bigint, 'mafia player reads mafia role rows only');
