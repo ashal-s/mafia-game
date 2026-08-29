@@ -485,8 +485,11 @@ export async function joinGameById(formData: FormData): Promise<void> {
   const joinLimit = await consumeRateLimit(supabase, {
     action: "game_join",
   });
-  if (!joinLimit.allowed && typeof code === "string") {
-    redirect(`/join/${code}?error=${encodeURIComponent(joinLimit.message)}`);
+  if (!joinLimit.allowed) {
+    if (typeof code === "string" && code) {
+      redirect(`/join/${code}?error=${encodeURIComponent(joinLimit.message)}`);
+    }
+    redirect("/dashboard");
   }
 
   const { error } = await supabase
