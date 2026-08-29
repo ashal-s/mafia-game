@@ -831,7 +831,7 @@ async function finishPhaseTransition(
     .select("id")
     .single();
 
-  if (nextError || !nextPhaseId) {
+  if (nextError || !next) {
     return {
       ended: false,
       error: nextError?.message ?? "Phase claim was lost before completion.",
@@ -855,7 +855,7 @@ async function finishPhaseTransition(
 
   await supabase.from("game_events").insert({
     game_id: gameId,
-    phase_id: nextPhaseId,
+    phase_id: next.id,
     event_type: "phase_changed",
     data: {
       from: current?.phase_type ?? null,
