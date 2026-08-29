@@ -4,15 +4,17 @@ create extension if not exists pgtap with schema extensions;
 select plan(20);
 
 -- Fixed IDs make failures readable. Fixtures are inserted as the database
--- owner, then every assertion runs as one of two players or the seatless host.
+-- owner, then assertions run as players, a prospective invitee, or the host.
 insert into auth.users (id, email) values
   ('10000000-0000-0000-0000-000000000001', 'host@rls.test'),
   ('10000000-0000-0000-0000-000000000002', 'town@rls.test'),
-  ('10000000-0000-0000-0000-000000000003', 'mafia@rls.test');
+  ('10000000-0000-0000-0000-000000000003', 'mafia@rls.test'),
+  ('10000000-0000-0000-0000-000000000004', 'invitee@rls.test');
 
 insert into public.games (id, code, host_id, status) values
   ('20000000-0000-0000-0000-000000000001', 'RLS001', '10000000-0000-0000-0000-000000000001', 'in_progress'),
-  ('20000000-0000-0000-0000-000000000002', 'RLS002', '10000000-0000-0000-0000-000000000001', 'in_progress');
+  ('20000000-0000-0000-0000-000000000002', 'RLS002', '10000000-0000-0000-0000-000000000001', 'in_progress'),
+  ('20000000-0000-0000-0000-000000000003', 'RLS003', '10000000-0000-0000-0000-000000000001', 'lobby');
 
 insert into public.game_players (id, game_id, user_id) values
   ('30000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000002'),
@@ -42,7 +44,7 @@ insert into public.notifications (user_id, game_id, type, title) values
 
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000002', true);
-select is((select count(*) from public.profiles), 1::bigint, 'player reads only own profile');
+select is((select count(*) from public.profiles), 3::bigint, 'player reads public profiles for all players');
 select is((select count(*) from public.games), 1::bigint, 'player reads joined game only');
 select is((select count(*) from public.game_players), 2::bigint, 'player reads joined roster');
 select is((select count(*) from public.game_player_roles), 1::bigint, 'town player reads only own role');
@@ -75,8 +77,12 @@ select is((select count(*) from public.chat_rooms), 2::bigint, 'mafia player rea
 select is((select count(*) from public.chat_messages), 2::bigint, 'mafia player reads mafia messages');
 select is((select count(*) from public.notifications), 1::bigint, 'mafia player reads only own notification');
 
+select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000004', true);
+select is((select count(*) from public.games), 1::bigint, 'invitee can resolve a joinable lobby');
+select is((select code from public.games), 'RLS003', 'invitee cannot discover started games');
+
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', true);
-select is((select count(*) from public.games), 2::bigint, 'host reads every hosted game');
+select is((select count(*) from public.games), 3::bigint, 'host reads every hosted game');
 select is((select count(*) from public.game_players), 2::bigint, 'seatless host reads hosted roster');
 select is((select count(*) from public.game_player_roles), 2::bigint, 'host reads every role');
 select is((select count(*) from public.role_actions), 1::bigint, 'host reads every private action');
