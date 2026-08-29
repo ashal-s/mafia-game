@@ -154,7 +154,13 @@ export default async function GamePage({
         game={game}
         initialPlayers={players ?? []}
         currentUserId={user.id}
-        startError={error === "min_players"}
+        errorMessage={
+          error === "min_players"
+            ? `You need at least ${game.min_players} players to start.`
+            : error === "rate_limited"
+              ? "You're doing that too quickly. Wait a few seconds and try again."
+              : null
+        }
       />
     );
   }
@@ -603,33 +609,37 @@ export default async function GamePage({
     }
 
     return (
-      <RoleReveal
-        gameId={game.id}
-        gameName={game.name}
-        rows={roleRows ?? []}
-        isHost={isHost}
-        currentUserId={user.id}
-        roleConfig={roleConfig}
-        phase={phase ?? null}
-        isPaused={game.is_paused}
-        hostPlayers={hostPlayers}
-        night={night}
-        voting={voting}
-        results={results}
-        roster={roster}
-        activityLog={activityLog}
-        timeline={timeline}
-        selfAlive={selfStatus === "alive"}
-        chat={{
-          gameId: game.id,
-          selfPlayerId,
-          initialMuted: selfMuted,
-          rooms: chatRooms,
-          namesById,
-        }}
-        reconnectState={reconnectState}
-        latestAlert={latestNotification ?? null}
-      />
+      <>
+        {error === "rate_limited" ? (
+          <p className="mx-auto mt-4 w-[calc(100%-3rem)] max-w-3xl rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+            You&apos;re doing that too quickly. Wait a few seconds and try again.
+          </p>
+        ) : null}
+        <RoleReveal
+          gameId={game.id}
+          gameName={game.name}
+          rows={roleRows ?? []}
+          isHost={isHost}
+          currentUserId={user.id}
+          roleConfig={roleConfig}
+          phase={phase ?? null}
+          isPaused={game.is_paused}
+          hostPlayers={hostPlayers}
+          night={night}
+          voting={voting}
+          results={results}
+          roster={roster}
+          activityLog={activityLog}
+          selfAlive={selfStatus === "alive"}
+          chat={{
+            gameId: game.id,
+            selfPlayerId,
+            initialMuted: selfMuted,
+            rooms: chatRooms,
+            namesById,
+          }}
+          />
+      </>
     );
   }
 

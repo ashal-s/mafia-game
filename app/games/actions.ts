@@ -12,15 +12,7 @@ import {
   nightActionForRole,
 } from "@/lib/night";
 import { evaluateWin, type WinAlignment } from "@/lib/win";
-import {
-  defaultRoleKeys,
-  investigate,
-  nextPhase,
-  resolveNight,
-  shuffle,
-  tallyVotes,
-  type PhaseType,
-} from "@/lib/game-engine";
+import { consumeRateLimit } from "@/lib/rate-limit";
 
 export type FormState = { error?: string };
 
@@ -263,6 +255,11 @@ export async function createGame(
     return { error: "Choose a game setup." };
   }
 
+  const creationLimit = await consumeRateLimit(supabase, {
+    action: "game_create",
+  });
+  if (!creationLimit.allowed) return { error: creationLimit.message };
+
   let presetId: string | null = null;
   let minPlayers = 5;
   let maxPlayers = 15;
@@ -436,6 +433,11 @@ export async function joinByCode(
     return { error: "Enter an invite code." };
   }
 
+  const joinLimit = await consumeRateLimit(supabase, {
+    action: "game_join",
+  });
+  if (!joinLimit.allowed) return { error: joinLimit.message };
+
   const { data: game } = await supabase
     .from("games")
     .select("id, status")
@@ -467,6 +469,16 @@ export async function joinGameById(formData: FormData): Promise<void> {
   const gameId = formData.get("game_id");
   const code = formData.get("code");
   if (typeof gameId !== "string" || !gameId) {
+    redirect("/dashboard");
+  }
+
+  const joinLimit = await consumeRateLimit(supabase, {
+    action: "game_join",
+  });
+  if (!joinLimit.allowed) {
+    if (typeof code === "string" && code) {
+      redirect(`/join/${code}?error=${encodeURIComponent(joinLimit.message)}`);
+    }
     redirect("/dashboard");
   }
 
@@ -518,6 +530,14 @@ export async function startGame(formData: FormData): Promise<void> {
   const { supabase, user } = await requirePlayer();
   const gameId = formData.get("game_id");
   if (typeof gameId !== "string") return;
+
+  const hostLimit = await consumeRateLimit(supabase, {
+    action: "host_control",
+    scope: gameId,
+  });
+  if (!hostLimit.allowed) {
+    redirect(`/games/${gameId}?error=rate_limited`);
+  }
 
   const { data: game } = await supabase
     .from("games")
@@ -814,6 +834,14 @@ export async function advancePhase(formData: FormData): Promise<void> {
   const gameId = formData.get("game_id");
   if (typeof gameId !== "string") return;
 
+  const hostLimit = await consumeRateLimit(supabase, {
+    action: "host_control",
+    scope: gameId,
+  });
+  if (!hostLimit.allowed) {
+    redirect(`/games/${gameId}?error=rate_limited`);
+  }
+
   const { data: game } = await supabase
     .from("games")
     .select("id, host_id, status")
@@ -922,6 +950,12 @@ export async function submitNightAction(
   if (typeof gameId !== "string" || !gameId) {
     return { error: "Missing game." };
   }
+
+  const actionLimit = await consumeRateLimit(supabase, {
+    action: "role_action",
+    scope: gameId,
+  });
+  if (!actionLimit.allowed) return { error: actionLimit.message };
 
   const { data: game } = await supabase
     .from("games")
@@ -1066,6 +1100,12 @@ export async function submitVote(
   if (typeof gameId !== "string" || !gameId) {
     return { error: "Missing game." };
   }
+
+  const voteLimit = await consumeRateLimit(supabase, {
+    action: "vote_change",
+    scope: gameId,
+  });
+  if (!voteLimit.allowed) return { error: voteLimit.message };
 
   const { data: game } = await supabase
     .from("games")
@@ -1637,6 +1677,14 @@ export async function setGamePause(formData: FormData): Promise<void> {
   const gameId = formData.get("game_id");
   if (typeof gameId !== "string") return;
 
+  const hostLimit = await consumeRateLimit(supabase, {
+    action: "host_control",
+    scope: gameId,
+  });
+  if (!hostLimit.allowed) {
+    redirect(`/games/${gameId}?error=rate_limited`);
+  }
+
   const pause = formData.get("pause") === "true";
 
   const { data: game } = await supabase
@@ -1696,6 +1744,14 @@ export async function endGameByHost(formData: FormData): Promise<void> {
 
   const gameId = formData.get("game_id");
   if (typeof gameId !== "string") return;
+
+  const hostLimit = await consumeRateLimit(supabase, {
+    action: "host_control",
+    scope: gameId,
+  });
+  if (!hostLimit.allowed) {
+    redirect(`/games/${gameId}?error=rate_limited`);
+  }
 
   const { data: game } = await supabase
     .from("games")

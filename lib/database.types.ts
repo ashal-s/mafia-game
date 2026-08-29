@@ -796,7 +796,16 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      consume_rate_limit: {
+        Args: {
+          p_action: string
+          p_scope?: string
+        }
+        Returns: {
+          allowed: boolean
+          retry_after_seconds: number
+        }[]
+      }
     }
     Enums: {
       chat_room_type: "town" | "mafia" | "dead" | "system"

@@ -54,12 +54,12 @@ export function Lobby({
   game: initialGame,
   initialPlayers,
   currentUserId,
-  startError,
+  errorMessage,
 }: {
   game: LobbyGame;
   initialPlayers: LobbyPlayer[];
   currentUserId: string;
-  startError: boolean;
+  errorMessage: string | null;
 }) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
@@ -258,9 +258,9 @@ export function Lobby({
           </div>
         </section>
 
-        {startError ? (
+        {errorMessage ? (
           <p className="mt-4 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">
-            You need at least {game.min_players} players to start.
+            {errorMessage}
           </p>
         ) : null}
 
