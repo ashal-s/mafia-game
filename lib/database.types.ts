@@ -107,6 +107,7 @@ export type Database = {
           game_id: string
           id: string
           phase_id: string | null
+          visibility: string
         }
         Insert: {
           actor_id?: string | null
@@ -116,6 +117,7 @@ export type Database = {
           game_id: string
           id?: string
           phase_id?: string | null
+          visibility?: string
         }
         Update: {
           actor_id?: string | null
@@ -125,6 +127,7 @@ export type Database = {
           game_id?: string
           id?: string
           phase_id?: string | null
+          visibility?: string
         }
         Relationships: [
           {
@@ -262,7 +265,6 @@ export type Database = {
           is_muted: boolean
           is_ready: boolean
           joined_at: string
-          role_id: string | null
           seat: number | null
           status: Database["public"]["Enums"]["game_player_status"]
           user_id: string
@@ -275,7 +277,6 @@ export type Database = {
           is_muted?: boolean
           is_ready?: boolean
           joined_at?: string
-          role_id?: string | null
           seat?: number | null
           status?: Database["public"]["Enums"]["game_player_status"]
           user_id: string
@@ -288,7 +289,6 @@ export type Database = {
           is_muted?: boolean
           is_ready?: boolean
           joined_at?: string
-          role_id?: string | null
           seat?: number | null
           status?: Database["public"]["Enums"]["game_player_status"]
           user_id?: string
@@ -299,13 +299,6 @@ export type Database = {
             columns: ["game_id"]
             isOneToOne: false
             referencedRelation: "games"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "game_players_role_id_fkey"
-            columns: ["role_id"]
-            isOneToOne: false
-            referencedRelation: "roles"
             referencedColumns: ["id"]
           },
           {
@@ -793,7 +786,16 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      consume_rate_limit: {
+        Args: {
+          p_action: string
+          p_scope?: string
+        }
+        Returns: {
+          allowed: boolean
+          retry_after_seconds: number
+        }[]
+      }
     }
     Enums: {
       chat_room_type: "town" | "mafia" | "dead" | "system"

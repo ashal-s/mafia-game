@@ -6,6 +6,9 @@ import { createClient } from "@/lib/supabase/client";
 import {
   advancePhase,
   endGameByHost,
+  removePlayerByHost,
+  reprocessCurrentPhase,
+  setPlayerLifeState,
   setGamePause,
 } from "@/app/games/actions";
 
@@ -17,6 +20,7 @@ export type HostPlayer = {
   roleName: string;
   alignment: Alignment;
   alive: boolean;
+  status: "alive" | "dead" | "left";
   isHost: boolean;
   muted: boolean;
   ready: boolean;
@@ -75,6 +79,9 @@ export function HostDashboard({
   const [paused, setPaused] = useState(isPaused);
   const [acted, setActed] = useState<Set<string>>(new Set());
   const [voted, setVoted] = useState<Set<string>>(new Set());
+  const [audit, setAudit] = useState<
+    { id: string; action_type: string; target_player_id: string | null; created_at: string }[]
+  >([]);
 
   const load = useCallback(async () => {
     const { data: activePhase } = await supabase
@@ -97,6 +104,13 @@ export function HostDashboard({
       .select("id, status, is_muted, is_ready")
       .eq("game_id", gameId);
 
+    const { data: hostActions } = await supabase
+      .from("host_actions")
+      .select("id, action_type, target_player_id, created_at")
+      .eq("game_id", gameId)
+      .order("created_at", { ascending: false })
+      .limit(12);
+
     const merged = (livePlayers ?? [])
       .map((lp) => {
         const base = staticById.get(lp.id);
@@ -104,6 +118,7 @@ export function HostDashboard({
         return {
           ...base,
           alive: lp.status === "alive",
+          status: lp.status,
           muted: lp.is_muted,
           ready: lp.is_ready,
         } satisfies HostPlayer;
@@ -132,6 +147,7 @@ export function HostDashboard({
     setDay(activePhase?.day_number ?? null);
     setActed(actedSet);
     setVoted(votedSet);
+    setAudit(hostActions ?? []);
     if (gameRow) setPaused(gameRow.is_paused);
   }, [supabase, gameId, staticById]);
 
@@ -145,6 +161,11 @@ export function HostDashboard({
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "role_actions", filter: `game_id=eq.${gameId}` },
+        () => void load(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "host_actions", filter: `game_id=eq.${gameId}` },
         () => void load(),
       )
       .on(
@@ -175,7 +196,7 @@ export function HostDashboard({
   }, [supabase, gameId, load]);
 
   const aliveCount = rows.filter((p) => p.alive).length;
-  const deadCount = rows.length - aliveCount;
+  const deadCount = rows.filter((p) => p.status === "dead").length;
 
   function statusFor(p: HostPlayer): { label: string; tone: string } {
     if (!p.alive) return { label: "—", tone: "text-zinc-600" };
@@ -257,6 +278,22 @@ export function HostDashboard({
         </form>
 
         <form
+          action={reprocessCurrentPhase}
+          onSubmit={(e) => {
+            if (!window.confirm("Re-run the current phase results? This may resend outcome notifications.")) e.preventDefault();
+          }}
+        >
+          <input type="hidden" name="game_id" value={gameId} />
+          <button
+            type="submit"
+            disabled={phase !== "night" && phase !== "voting"}
+            className="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-700 px-4 text-sm font-medium text-zinc-200 transition-colors hover:border-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Reprocess phase
+          </button>
+        </form>
+
+        <form
           action={endGameByHost}
           onSubmit={(e) => {
             if (!window.confirm("End the game now for everyone?")) {
@@ -291,6 +328,7 @@ export function HostDashboard({
               <th className="px-4 py-2 font-medium">Team</th>
               <th className="px-4 py-2 font-medium">State</th>
               <th className="px-4 py-2 font-medium">Status</th>
+              <th className="px-4 py-2 font-medium">Recovery</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-800">
@@ -329,17 +367,60 @@ export function HostDashboard({
                           : "text-zinc-500 line-through"
                       }
                     >
-                      {p.alive ? "Alive" : "Dead"}
+                      {p.status === "left" ? "Removed" : p.alive ? "Alive" : "Dead"}
                     </span>
                   </td>
                   <td className={`px-4 py-2 font-medium ${status.tone}`}>
                     {status.label}
+                  </td>
+                  <td className="px-4 py-2">
+                    {p.status !== "left" ? (
+                      <div className="flex flex-wrap gap-2">
+                        <form action={setPlayerLifeState}>
+                          <input type="hidden" name="game_id" value={gameId} />
+                          <input type="hidden" name="player_id" value={p.id} />
+                          <input type="hidden" name="status" value={p.alive ? "dead" : "alive"} />
+                          <button type="submit" className="text-xs font-medium text-amber-300 hover:text-amber-200">
+                            Mark {p.alive ? "dead" : "alive"}
+                          </button>
+                        </form>
+                        {!p.isHost ? (
+                          <form
+                            action={removePlayerByHost}
+                            onSubmit={(e) => {
+                              if (!window.confirm(`Remove ${p.name} from the active game?`)) e.preventDefault();
+                            }}
+                          >
+                            <input type="hidden" name="game_id" value={gameId} />
+                            <input type="hidden" name="player_id" value={p.id} />
+                            <button type="submit" className="text-xs font-medium text-red-400 hover:text-red-300">Remove</button>
+                          </form>
+                        ) : null}
+                      </div>
+                    ) : <span className="text-xs text-zinc-600">No actions</span>}
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Recovery audit log</h3>
+        {audit.length ? (
+          <ul className="mt-3 space-y-2">
+            {audit.map((entry) => (
+              <li key={entry.id} className="flex items-center justify-between gap-4 text-xs">
+                <span className="text-zinc-300">
+                  {entry.action_type.replaceAll("_", " ")}
+                  {entry.target_player_id ? ` · ${staticById.get(entry.target_player_id)?.name ?? "Player"}` : ""}
+                </span>
+                <time className="shrink-0 text-zinc-600">{new Date(entry.created_at).toLocaleString()}</time>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="mt-2 text-xs text-zinc-600">No recovery actions yet.</p>}
       </div>
     </section>
   );

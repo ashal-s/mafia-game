@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { GameTimeline, type TimelineEvent } from "./game-timeline";
+import { AppHeader } from "@/components/app-header";
 
 type Alignment = "town" | "mafia" | "neutral";
 
@@ -44,26 +46,24 @@ export function GameOver({
   gameName,
   winner,
   reveal,
+  timeline,
+  isHost,
 }: {
   gameName: string | null;
   winner: Alignment | null;
   reveal: RevealEntry[];
+  timeline: TimelineEvent[];
+  isHost: boolean;
 }) {
   const banner = winner ? WINNER_BANNER[winner] : null;
 
   return (
     <div className="flex flex-1 flex-col bg-transparent text-zinc-100">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
-        <Link
-          href="/dashboard"
-          className="text-lg font-bold tracking-tight text-red-500"
-        >
-          Mafia
-        </Link>
+      <AppHeader>
         <span className="text-xs font-medium uppercase tracking-widest text-zinc-500">
           {gameName || "Mafia game"}
         </span>
-      </header>
+      </AppHeader>
 
       <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-10">
         <section
@@ -135,6 +135,8 @@ export function GameOver({
             </table>
           </div>
         </section>
+
+        <GameTimeline events={timeline} isHost={isHost} />
 
         <div className="mt-8">
           <Link

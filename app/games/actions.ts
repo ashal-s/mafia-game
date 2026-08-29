@@ -12,6 +12,16 @@ import {
   nightActionForRole,
 } from "@/lib/night";
 import { evaluateWin, type WinAlignment } from "@/lib/win";
+import {
+  defaultRoleKeys,
+  investigate,
+  nextPhase,
+  resolveNight,
+  shuffle,
+  tallyVotes,
+  type PhaseType,
+} from "@/lib/game-engine";
+import { consumeRateLimit } from "@/lib/rate-limit";
 
 export type FormState = { error?: string };
 
@@ -27,18 +37,7 @@ function generateInviteCode(): string {
   return code;
 }
 
-function shuffle<T>(items: T[]): T[] {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
 // Phase cycle: night → discussion → voting → results → (next day) night.
-type PhaseType = "night" | "discussion" | "voting" | "results";
-const PHASE_ORDER: PhaseType[] = ["night", "discussion", "voting", "results"];
 const PHASE_DURATIONS_SECONDS: Record<PhaseType, number> = {
   night: 60,
   discussion: 120,
@@ -46,10 +45,6 @@ const PHASE_DURATIONS_SECONDS: Record<PhaseType, number> = {
   results: 30,
 };
 
-function nextPhaseOf(current: PhaseType): PhaseType {
-  const idx = PHASE_ORDER.indexOf(current);
-  return PHASE_ORDER[(idx + 1) % PHASE_ORDER.length];
-}
 
 type DbClient = Awaited<ReturnType<typeof createClient>>;
 
@@ -143,7 +138,7 @@ async function notifyPhaseStart(
       supabase,
       gameId,
       allUserIds,
-      "phase",
+      "phase_started",
       "Night falls",
       `Night ${dayNumber} has begun.`,
     );
@@ -175,7 +170,7 @@ async function notifyPhaseStart(
       supabase,
       gameId,
       allUserIds,
-      "phase",
+      "phase_started",
       "Discussion has begun",
       "Debate who the mafia might be.",
     );
@@ -184,7 +179,7 @@ async function notifyPhaseStart(
       supabase,
       gameId,
       allUserIds,
-      "phase",
+      "voting_started",
       "Voting has started",
       "Cast your vote to put a suspect on trial.",
     );
@@ -201,7 +196,7 @@ async function notifyPhaseStart(
       supabase,
       gameId,
       allUserIds,
-      "phase",
+      "phase_started",
       "Results are in",
       `The Day ${dayNumber} results are ready.`,
     );
@@ -269,16 +264,26 @@ export async function createGame(
     return { error: "Choose a game setup." };
   }
 
+  const creationLimit = await consumeRateLimit(supabase, {
+    action: "game_create",
+  });
+  if (!creationLimit.allowed) return { error: creationLimit.message };
+
   let presetId: string | null = null;
   let minPlayers = 5;
   let maxPlayers = 15;
   const settingsObj: {
     composition?: Record<string, number>;
+    deadChatEnabled?: boolean;
     roleConfig?: {
       sniper?: { bullets: number | null };
       healer?: { selfHeals: number | null };
     };
   } = {};
+
+  // Graveyard chat is opt-in per game. The rest of the dead-player experience
+  // (spectating public state without acting or voting) is always available.
+  settingsObj.deadChatEnabled = formData.get("dead_chat_enabled") === "on";
 
   if (choice === "custom") {
     const playerCount = Number(formData.get("players"));
@@ -437,6 +442,11 @@ export async function joinByCode(
     return { error: "Enter an invite code." };
   }
 
+  const joinLimit = await consumeRateLimit(supabase, {
+    action: "game_join",
+  });
+  if (!joinLimit.allowed) return { error: joinLimit.message };
+
   const { data: game } = await supabase
     .from("games")
     .select("id, status")
@@ -468,6 +478,16 @@ export async function joinGameById(formData: FormData): Promise<void> {
   const gameId = formData.get("game_id");
   const code = formData.get("code");
   if (typeof gameId !== "string" || !gameId) {
+    redirect("/dashboard");
+  }
+
+  const joinLimit = await consumeRateLimit(supabase, {
+    action: "game_join",
+  });
+  if (!joinLimit.allowed) {
+    if (typeof code === "string" && code) {
+      redirect(`/join/${code}?error=${encodeURIComponent(joinLimit.message)}`);
+    }
     redirect("/dashboard");
   }
 
@@ -519,6 +539,14 @@ export async function startGame(formData: FormData): Promise<void> {
   const { supabase, user } = await requirePlayer();
   const gameId = formData.get("game_id");
   if (typeof gameId !== "string") return;
+
+  const hostLimit = await consumeRateLimit(supabase, {
+    action: "host_control",
+    scope: gameId,
+  });
+  if (!hostLimit.allowed) {
+    redirect(`/games/${gameId}?error=rate_limited`);
+  }
 
   const { data: game } = await supabase
     .from("games")
@@ -588,15 +616,10 @@ export async function startGame(formData: FormData): Promise<void> {
 
   if (roleIds.length === 0) {
     // Fallback composition derived from the player count.
-    const mafiaCount = Math.max(1, Math.floor(players.length / 4));
-    const mafia = roleByKey.get("mafia");
-    const detective = roleByKey.get("detective");
-    const healer = roleByKey.get("healer");
-    const sniper = roleByKey.get("sniper");
-    for (let i = 0; i < mafiaCount && mafia; i++) roleIds.push(mafia.id);
-    if (detective) roleIds.push(detective.id);
-    if (healer) roleIds.push(healer.id);
-    if (sniper && players.length >= 7) roleIds.push(sniper.id);
+    for (const key of defaultRoleKeys(players.length)) {
+      const role = roleByKey.get(key);
+      if (role) roleIds.push(role.id);
+    }
   }
 
   while (roleIds.length < players.length) roleIds.push(villager.id);
@@ -632,17 +655,26 @@ export async function startGame(formData: FormData): Promise<void> {
     ),
   );
 
-  // Create the town, mafia, and dead chat rooms once.
+  // Create shared rooms once, plus the optional graveyard selected by the host.
   const { count: roomCount } = await supabase
     .from("chat_rooms")
     .select("id", { count: "exact", head: true })
     .eq("game_id", gameId);
   if (!roomCount) {
-    await supabase.from("chat_rooms").insert([
+    const deadChatEnabled =
+      !game.settings ||
+      typeof game.settings !== "object" ||
+      Array.isArray(game.settings) ||
+      (game.settings as { deadChatEnabled?: boolean }).deadChatEnabled !== false;
+    const rooms = [
       { game_id: gameId, type: "town", name: "Town Square" },
       { game_id: gameId, type: "mafia", name: "Mafia" },
-      { game_id: gameId, type: "dead", name: "Graveyard" },
-    ]);
+    ] as const;
+    await supabase.from("chat_rooms").insert(
+      deadChatEnabled
+        ? [...rooms, { game_id: gameId, type: "dead" as const, name: "Graveyard" }]
+        : [...rooms],
+    );
   }
 
   // Open the first night phase once.
@@ -732,7 +764,7 @@ async function transitionPhase(
   const currentType = (current?.phase_type ?? "results") as PhaseType;
   const currentDay = current?.day_number ?? 1;
 
-  const nextType = nextPhaseOf(currentType);
+  const nextType = nextPhase(currentType);
   // A full cycle completes when results rolls back to night — bump the day.
   const nextDay = currentType === "results" ? currentDay + 1 : currentDay;
   const nextNumber = (current?.phase_number ?? 0) + 1;
@@ -811,6 +843,14 @@ export async function advancePhase(formData: FormData): Promise<void> {
   const gameId = formData.get("game_id");
   if (typeof gameId !== "string") return;
 
+  const hostLimit = await consumeRateLimit(supabase, {
+    action: "host_control",
+    scope: gameId,
+  });
+  if (!hostLimit.allowed) {
+    redirect(`/games/${gameId}?error=rate_limited`);
+  }
+
   const { data: game } = await supabase
     .from("games")
     .select("id, host_id, status")
@@ -822,10 +862,35 @@ export async function advancePhase(formData: FormData): Promise<void> {
     redirect(`/games/${gameId}`);
   }
 
+  const { data: beforePhase } = await supabase
+    .from("game_phases")
+    .select("id, phase_type, phase_number, day_number")
+    .eq("game_id", gameId)
+    .eq("status", "active")
+    .order("phase_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
   const result = await transitionPhase(supabase, gameId);
   if (result.error) {
     redirect(`/games/${gameId}?error=${encodeURIComponent(result.error)}`);
   }
+
+  const { data: afterPhase } = await supabase
+    .from("game_phases")
+    .select("id, phase_type, phase_number, day_number")
+    .eq("game_id", gameId)
+    .eq("status", "active")
+    .order("phase_number", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  await supabase.from("host_actions").insert({
+    game_id: gameId,
+    host_id: user.id,
+    action_type: "force_next_phase",
+    payload: { before: beforePhase, after: afterPhase, ended: result.ended },
+  });
 
   revalidatePath(`/games/${gameId}`);
 }
@@ -894,6 +959,12 @@ export async function submitNightAction(
   if (typeof gameId !== "string" || !gameId) {
     return { error: "Missing game." };
   }
+
+  const actionLimit = await consumeRateLimit(supabase, {
+    action: "role_action",
+    scope: gameId,
+  });
+  if (!actionLimit.allowed) return { error: actionLimit.message };
 
   const { data: game } = await supabase
     .from("games")
@@ -1039,6 +1110,12 @@ export async function submitVote(
     return { error: "Missing game." };
   }
 
+  const voteLimit = await consumeRateLimit(supabase, {
+    action: "vote_change",
+    scope: gameId,
+  });
+  if (!voteLimit.allowed) return { error: voteLimit.message };
+
   const { data: game } = await supabase
     .from("games")
     .select("id, status, is_paused")
@@ -1144,32 +1221,14 @@ async function processVoting(
     .select("voter_id, target_id")
     .eq("phase_id", phaseId);
 
-  // Tally one vote per living voter for living targets (abstains are ignored).
-  const tally = new Map<string, number>();
-  for (const v of votes ?? []) {
-    if (
-      v.target_id &&
-      aliveIds.has(v.voter_id) &&
-      aliveIds.has(v.target_id)
-    ) {
-      tally.set(v.target_id, (tally.get(v.target_id) ?? 0) + 1);
-    }
-  }
-
-  // Find the highest-voted target; a draw for the top spot eliminates no one.
-  let eliminated: string | null = null;
-  let topCount = 0;
-  let tie = false;
-  for (const [target, count] of tally) {
-    if (count > topCount) {
-      topCount = count;
-      eliminated = target;
-      tie = false;
-    } else if (count === topCount) {
-      tie = true;
-    }
-  }
-  if (tie || topCount === 0) eliminated = null;
+  const voteResult = tallyVotes(
+    (votes ?? []).map((vote) => ({
+      voterId: vote.voter_id,
+      targetId: vote.target_id,
+    })),
+    aliveIds,
+  );
+  const { eliminated } = voteResult;
 
   const now = new Date().toISOString();
 
@@ -1185,7 +1244,7 @@ async function processVoting(
       await supabase.from("notifications").insert({
         user_id: uid,
         game_id: gameId,
-        type: "eliminated",
+        type: "killed",
         title: "You were voted out",
         body: "The town voted to eliminate you.",
       });
@@ -1203,7 +1262,7 @@ async function processVoting(
       supabase,
       gameId,
       allUserIds.filter((u) => u !== uid),
-      "player_killed",
+      "killed",
       "A player was voted out",
       `${victimName} was eliminated by the town vote.`,
     );
@@ -1224,9 +1283,17 @@ async function processVoting(
     data: {
       day_number: dayNumber,
       eliminated,
-      tie: tie && topCount > 0,
-      tally: Object.fromEntries(tally),
+      tie: voteResult.tied,
+      tally: voteResult.tally,
     },
+  });
+
+  await supabase.from("game_events").insert({
+    game_id: gameId,
+    phase_id: phaseId,
+    event_type: "voting_tally",
+    visibility: "host",
+    data: { day_number: dayNumber, tally: voteResult.tally },
   });
 }
 
@@ -1359,43 +1426,22 @@ async function processNight(
     .eq("phase_id", phaseId);
   const list = actions ?? [];
 
-  // Mafia kill: pick the target with the most votes among living players.
-  const mafiaVotes = new Map<string, number>();
-  for (const a of list) {
-    if (a.action_type === "mafia_kill" && a.target_id && aliveIds.has(a.target_id)) {
-      mafiaVotes.set(a.target_id, (mafiaVotes.get(a.target_id) ?? 0) + 1);
-    }
-  }
-  let mafiaTarget: string | null = null;
-  let bestVotes = 0;
-  for (const [target, votes] of mafiaVotes) {
-    if (votes > bestVotes) {
-      bestVotes = votes;
-      mafiaTarget = target;
-    }
-  }
-
-  const sniperTarget =
-    list.find(
-      (a) =>
-        a.action_type === "sniper_shoot" &&
-        a.target_id &&
-        aliveIds.has(a.target_id),
-    )?.target_id ?? null;
-
-  const protectedTarget =
-    list.find(
-      (a) => a.action_type === "heal" && a.target_id && aliveIds.has(a.target_id),
-    )?.target_id ?? null;
-
-  // Deaths: mafia target dies unless protected; the sniper's shot always lands.
-  const deaths = new Set<string>();
-  if (mafiaTarget && mafiaTarget !== protectedTarget) deaths.add(mafiaTarget);
-  if (sniperTarget) deaths.add(sniperTarget);
+  const nightResult = resolveNight(
+    list.map((action) => ({
+      type: action.action_type as
+        | "mafia_kill"
+        | "heal"
+        | "investigate"
+        | "sniper_shoot",
+      targetId: action.target_id,
+    })),
+    aliveIds,
+  );
+  const { mafiaTarget, protectedTarget } = nightResult;
 
   const now = new Date().toISOString();
 
-  for (const playerId of deaths) {
+  for (const playerId of nightResult.deaths) {
     await supabase
       .from("game_players")
       .update({ status: "dead", eliminated_at: now })
@@ -1407,7 +1453,7 @@ async function processNight(
       await supabase.from("notifications").insert({
         user_id: uid,
         game_id: gameId,
-        type: "eliminated",
+        type: "killed",
         title: "You were eliminated",
         body: "You did not survive the night.",
       });
@@ -1425,7 +1471,7 @@ async function processNight(
       supabase,
       gameId,
       allUserIds.filter((u) => u !== uid),
-      "player_killed",
+      "killed",
       "A player was killed",
       `${victimName} did not survive the night.`,
     );
@@ -1445,6 +1491,7 @@ async function processNight(
       game_id: gameId,
       phase_id: phaseId,
       event_type: "player_saved",
+      visibility: "host",
       data: { player_id: protectedTarget, day_number: dayNumber },
     });
   }
@@ -1452,7 +1499,7 @@ async function processNight(
   // Detective: save a private suspicious / not-suspicious result + notify them.
   for (const a of list) {
     if (a.action_type === "investigate" && a.target_id) {
-      const suspicious = alignmentByPlayer.get(a.target_id) === "mafia";
+      const { suspicious } = investigate(alignmentByPlayer.get(a.target_id));
       await supabase
         .from("role_actions")
         .update({
@@ -1493,7 +1540,7 @@ async function processNight(
     game_id: gameId,
     phase_id: phaseId,
     event_type: "night_resolved",
-    data: { day_number: dayNumber, deaths: Array.from(deaths) },
+    data: { day_number: dayNumber, deaths: nightResult.deaths },
   });
 }
 
@@ -1603,6 +1650,13 @@ export async function toggleMute(formData: FormData): Promise<void> {
     redirect(`/games/${gameId}`);
   }
 
+  const { data: target } = await supabase
+    .from("game_players")
+    .select("is_muted")
+    .eq("id", playerId)
+    .eq("game_id", gameId)
+    .maybeSingle();
+
   await supabase
     .from("game_players")
     .update({ is_muted: mute })
@@ -1615,6 +1669,7 @@ export async function toggleMute(formData: FormData): Promise<void> {
     host_id: user.id,
     action_type: mute ? "mute_player" : "unmute_player",
     target_player_id: playerId,
+    payload: { before: { is_muted: target?.is_muted ?? !mute }, after: { is_muted: mute } },
   });
 
   revalidatePath(`/games/${gameId}`);
@@ -1630,6 +1685,14 @@ export async function setGamePause(formData: FormData): Promise<void> {
 
   const gameId = formData.get("game_id");
   if (typeof gameId !== "string") return;
+
+  const hostLimit = await consumeRateLimit(supabase, {
+    action: "host_control",
+    scope: gameId,
+  });
+  if (!hostLimit.allowed) {
+    redirect(`/games/${gameId}?error=rate_limited`);
+  }
 
   const pause = formData.get("pause") === "true";
 
@@ -1652,6 +1715,13 @@ export async function setGamePause(formData: FormData): Promise<void> {
     game_id: gameId,
     host_id: user.id,
     action_type: pause ? "pause_game" : "resume_game",
+    payload: { before: { is_paused: !pause }, after: { is_paused: pause } },
+  });
+
+  await supabase.from("game_events").insert({
+    game_id: gameId,
+    event_type: pause ? "game_paused" : "game_resumed",
+    data: { message: pause ? "The host paused the game." : "The host resumed the game." },
   });
 
   const { data: players } = await supabase
@@ -1684,6 +1754,14 @@ export async function endGameByHost(formData: FormData): Promise<void> {
   const gameId = formData.get("game_id");
   if (typeof gameId !== "string") return;
 
+  const hostLimit = await consumeRateLimit(supabase, {
+    action: "host_control",
+    scope: gameId,
+  });
+  if (!hostLimit.allowed) {
+    redirect(`/games/${gameId}?error=rate_limited`);
+  }
+
   const { data: game } = await supabase
     .from("games")
     .select("id, host_id, status")
@@ -1707,8 +1785,120 @@ export async function endGameByHost(formData: FormData): Promise<void> {
   await supabase.from("host_actions").insert({
     game_id: gameId,
     host_id: user.id,
-    action_type: "end_game",
+    action_type: "force_game_end",
+    payload: { before: { status: game.status }, after: { status: "completed" } },
   });
 
+  revalidatePath(`/games/${gameId}`);
+}
+
+/** Corrects a player's alive/dead state without exposing a general player edit API. */
+export async function setPlayerLifeState(formData: FormData): Promise<void> {
+  const { supabase, user } = await requirePlayer();
+  const gameId = formData.get("game_id");
+  const playerId = formData.get("player_id");
+  const nextStatus = formData.get("status");
+  if (
+    typeof gameId !== "string" ||
+    typeof playerId !== "string" ||
+    (nextStatus !== "alive" && nextStatus !== "dead")
+  ) return;
+
+  const [{ data: game }, { data: player }] = await Promise.all([
+    supabase.from("games").select("host_id, status").eq("id", gameId).maybeSingle(),
+    supabase
+      .from("game_players")
+      .select("id, status, user_id")
+      .eq("id", playerId)
+      .eq("game_id", gameId)
+      .maybeSingle(),
+  ]);
+  if (!game || game.host_id !== user.id || game.status !== "in_progress" || !player) {
+    redirect(`/games/${gameId}`);
+  }
+  if (player.status === nextStatus) return;
+
+  const eliminatedAt = nextStatus === "dead" ? new Date().toISOString() : null;
+  const { error } = await supabase
+    .from("game_players")
+    .update({ status: nextStatus, eliminated_at: eliminatedAt })
+    .eq("id", playerId)
+    .eq("game_id", gameId);
+  if (error) redirect(`/games/${gameId}?error=${encodeURIComponent(error.message)}`);
+
+  await supabase.from("host_actions").insert({
+    game_id: gameId,
+    host_id: user.id,
+    action_type: "set_player_status",
+    target_player_id: playerId,
+    payload: { before: { status: player.status }, after: { status: nextStatus } },
+  });
+  await supabase.from("game_events").insert({
+    game_id: gameId,
+    actor_id: playerId,
+    event_type: "host_player_status_changed",
+    data: { player_id: playerId, from: player.status, to: nextStatus },
+  });
+  await notifyUsers(supabase, gameId, [player.user_id], "host_override", "Player state corrected", `The host marked you ${nextStatus}.`);
+  revalidatePath(`/games/${gameId}`);
+}
+
+/** Removes an inactive participant while retaining their row for audit history. */
+export async function removePlayerByHost(formData: FormData): Promise<void> {
+  const { supabase, user } = await requirePlayer();
+  const gameId = formData.get("game_id");
+  const playerId = formData.get("player_id");
+  if (typeof gameId !== "string" || typeof playerId !== "string") return;
+
+  const [{ data: game }, { data: player }] = await Promise.all([
+    supabase.from("games").select("host_id, status").eq("id", gameId).maybeSingle(),
+    supabase.from("game_players").select("id, status, is_host, user_id").eq("id", playerId).eq("game_id", gameId).maybeSingle(),
+  ]);
+  if (!game || game.host_id !== user.id || game.status !== "in_progress" || !player || player.is_host) {
+    redirect(`/games/${gameId}`);
+  }
+
+  const { error } = await supabase.from("game_players").update({ status: "left" }).eq("id", playerId).eq("game_id", gameId);
+  if (error) redirect(`/games/${gameId}?error=${encodeURIComponent(error.message)}`);
+  await supabase.from("host_actions").insert({
+    game_id: gameId, host_id: user.id, action_type: "remove_inactive_player", target_player_id: playerId,
+    payload: { before: { status: player.status }, after: { status: "left" } },
+  });
+  await supabase.from("game_events").insert({
+    game_id: gameId, actor_id: playerId, event_type: "player_removed",
+    data: { player_id: playerId, reason: "inactive" },
+  });
+  await notifyUsers(supabase, gameId, [player.user_id], "host_override", "Removed from game", "The host removed you from the active game.");
+  revalidatePath(`/games/${gameId}`);
+}
+
+/** Runs the active phase resolver again, useful after correcting submitted inputs. */
+export async function reprocessCurrentPhase(formData: FormData): Promise<void> {
+  const { supabase, user } = await requirePlayer();
+  const gameId = formData.get("game_id");
+  if (typeof gameId !== "string") return;
+  const { data: game } = await supabase.from("games").select("host_id, status").eq("id", gameId).maybeSingle();
+  if (!game || game.host_id !== user.id || game.status !== "in_progress") redirect(`/games/${gameId}`);
+
+  const { data: phase } = await supabase
+    .from("game_phases")
+    .select("id, phase_type, phase_number, day_number")
+    .eq("game_id", gameId).eq("status", "active")
+    .order("phase_number", { ascending: false }).limit(1).maybeSingle();
+  if (!phase || (phase.phase_type !== "night" && phase.phase_type !== "voting")) {
+    redirect(`/games/${gameId}?error=${encodeURIComponent("Only night and voting phases can be reprocessed.")}`);
+  }
+
+  if (phase.phase_type === "night") await processNight(supabase, gameId, phase.id, phase.day_number);
+  else await processVoting(supabase, gameId, phase.id, phase.day_number);
+
+  await supabase.from("host_actions").insert({
+    game_id: gameId, host_id: user.id, action_type: "reprocess_phase",
+    payload: { phase_id: phase.id, phase_type: phase.phase_type, phase_number: phase.phase_number, day_number: phase.day_number },
+  });
+  await supabase.from("game_events").insert({
+    game_id: gameId, phase_id: phase.id, event_type: "phase_reprocessed",
+    data: { phase_type: phase.phase_type, phase_number: phase.phase_number, day_number: phase.day_number },
+  });
   revalidatePath(`/games/${gameId}`);
 }

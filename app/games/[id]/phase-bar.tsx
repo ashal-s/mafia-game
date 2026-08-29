@@ -66,21 +66,62 @@ function nextPhaseLabel(current: string): string {
 }
 
 function formatClock(seconds: number): string {
-  const m = Math.floor(seconds / 60);
+  const hours = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
   const s = seconds % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
+  return hours > 0
+    ? `${hours}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
 }
+
+type PlayerPhaseState = "action" | "submitted" | "waiting" | "dead";
+
+const PLAYER_STATE_META: Record<
+  PlayerPhaseState,
+  { eyebrow: string; title: string; detail: string; style: string; icon: string }
+> = {
+  action: {
+    eyebrow: "Action required",
+    title: "You need to act",
+    detail: "Complete your action below before this phase ends.",
+    style: "border-amber-500/40 bg-amber-500/10 text-amber-100",
+    icon: "!",
+  },
+  submitted: {
+    eyebrow: "Submitted",
+    title: "Your choice is locked in",
+    detail: "You can update it below until this phase ends.",
+    style: "border-emerald-500/30 bg-emerald-500/10 text-emerald-100",
+    icon: "✓",
+  },
+  waiting: {
+    eyebrow: "No action needed",
+    title: "You’re all caught up",
+    detail: "Stay tuned while the current phase continues.",
+    style: "border-sky-500/25 bg-sky-500/10 text-sky-100",
+    icon: "…",
+  },
+  dead: {
+    eyebrow: "Eliminated",
+    title: "You’re watching from the graveyard",
+    detail: "You can follow the game, but you can’t vote or use abilities.",
+    style: "border-red-500/35 bg-red-500/10 text-red-100",
+    icon: "×",
+  },
+};
 
 export function PhaseBar({
   gameId,
   isHost,
   initialPhase,
   paused = false,
+  playerState = "waiting",
 }: {
   gameId: string;
   isHost: boolean;
   initialPhase: PhaseRow | null;
   paused?: boolean;
+  playerState?: PlayerPhaseState;
 }) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
@@ -151,8 +192,9 @@ export function PhaseBar({
 
   const meta = PHASE_META[phase.phase_type] ?? PHASE_META.day;
   const secondsLeft = phase.ends_at
-    ? Math.max(0, Math.floor((new Date(phase.ends_at).getTime() - now) / 1000))
+    ? Math.max(0, Math.ceil((new Date(phase.ends_at).getTime() - now) / 1000))
     : null;
+  const playerMeta = PLAYER_STATE_META[playerState];
 
   const timerText = paused
     ? "Paused"
@@ -163,49 +205,78 @@ export function PhaseBar({
         : formatClock(secondsLeft);
 
   return (
-    <section className={`rounded-2xl border p-5 ${meta.card}`}>
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
-            Day {phase.day_number}
-          </p>
-          <div className="mt-1 flex items-center gap-2">
-            <span className={`h-2.5 w-2.5 rounded-full ${meta.dot}`} />
-            <h2 className={`text-xl font-semibold ${meta.text}`}>
-              {meta.label}
-            </h2>
+    <section
+      className={`overflow-hidden rounded-2xl border ${meta.card}`}
+      aria-label="Current game phase"
+    >
+      <div className="p-5 sm:p-6">
+        <div className="grid gap-5 sm:grid-cols-[1fr_auto] sm:items-start">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
+              Day {phase.day_number}
+            </p>
+            <div className="mt-1 flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${meta.dot}`} />
+              <h2 className={`text-xl font-semibold ${meta.text}`}>
+                {meta.label}
+              </h2>
+            </div>
+            {meta.blurb ? (
+              <p className="mt-1 text-sm text-zinc-400">{meta.blurb}</p>
+            ) : null}
           </div>
-          {meta.blurb ? (
-            <p className="mt-1 text-sm text-zinc-400">{meta.blurb}</p>
-          ) : null}
+
+          <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-left sm:min-w-40 sm:text-right">
+            <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
+              Time left
+            </p>
+            <p
+              className="mt-1 font-mono text-3xl font-semibold tabular-nums text-zinc-50 sm:text-4xl"
+              role="timer"
+              aria-live="off"
+              suppressHydrationWarning
+            >
+              {timerText}
+            </p>
+          </div>
         </div>
 
-        <div className="text-right">
-          <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
-            Time left
-          </p>
-          <p
-            className="mt-1 font-mono text-3xl font-semibold tabular-nums text-zinc-50"
-            suppressHydrationWarning
+        <div
+          className={`mt-5 flex gap-3 rounded-xl border p-4 ${playerMeta.style}`}
+        >
+          <span
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-current/30 text-sm font-bold"
+            aria-hidden="true"
           >
-            {timerText}
-          </p>
+            {playerMeta.icon}
+          </span>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest opacity-70">
+              {playerMeta.eyebrow}
+            </p>
+            <p className="mt-0.5 text-sm font-semibold">{playerMeta.title}</p>
+            <p className="mt-1 text-xs leading-5 opacity-75">
+              {playerMeta.detail}
+            </p>
+          </div>
         </div>
-      </div>
 
-      {isHost ? (
-        <form action={advancePhase} className="mt-4">
-          <input type="hidden" name="game_id" value={gameId} />
-          <SubmitButton pendingText="Advancing…">
-            Move to {nextPhaseLabel(phase.phase_type)} →
-          </SubmitButton>
-        </form>
-      ) : (
-        <p className="mt-4 text-xs text-zinc-500">
-          Waiting for the host to advance to{" "}
-          {nextPhaseLabel(phase.phase_type)}.
-        </p>
-      )}
+        {isHost ? (
+          <form action={advancePhase} className="mt-4">
+            <input type="hidden" name="game_id" value={gameId} />
+            <SubmitButton pendingText="Advancing…">
+              Move to {nextPhaseLabel(phase.phase_type)} →
+            </SubmitButton>
+          </form>
+        ) : (
+          <p className="mt-4 text-xs text-zinc-400">
+            <span className="text-zinc-500">Up next</span>{" "}
+            <span className="font-semibold text-zinc-200">
+              {nextPhaseLabel(phase.phase_type)}
+            </span>
+          </p>
+        )}
+      </div>
     </section>
   );
 }

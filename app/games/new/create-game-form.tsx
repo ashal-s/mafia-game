@@ -479,6 +479,24 @@ export function CreateGameForm({
         </div>
       ) : null}
 
+      <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5">
+        <input
+          type="checkbox"
+          name="dead_chat_enabled"
+          defaultChecked
+          className="mt-1 accent-red-500"
+        />
+        <span>
+          <span className="block text-sm font-medium text-zinc-200">
+            Enable graveyard chat
+          </span>
+          <span className="mt-0.5 block text-xs text-zinc-500">
+            Eliminated players can talk privately with each other. The host can
+            read the room for moderation.
+          </span>
+        </span>
+      </label>
+
       {state.error ? (
         <p className="rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-300">
           {state.error}

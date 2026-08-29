@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "rm -rf .test-dist && tsc lib/game-engine.ts lib/win.ts --outDir .test-dist --module commonjs --target es2022 --skipLibCheck && node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
