@@ -143,7 +143,7 @@ async function notifyPhaseStart(
       supabase,
       gameId,
       allUserIds,
-      "phase",
+      "phase_started",
       "Night falls",
       `Night ${dayNumber} has begun.`,
     );
@@ -175,7 +175,7 @@ async function notifyPhaseStart(
       supabase,
       gameId,
       allUserIds,
-      "phase",
+      "phase_started",
       "Discussion has begun",
       "Debate who the mafia might be.",
     );
@@ -184,7 +184,7 @@ async function notifyPhaseStart(
       supabase,
       gameId,
       allUserIds,
-      "phase",
+      "voting_started",
       "Voting has started",
       "Cast your vote to put a suspect on trial.",
     );
@@ -201,7 +201,7 @@ async function notifyPhaseStart(
       supabase,
       gameId,
       allUserIds,
-      "phase",
+      "phase_started",
       "Results are in",
       `The Day ${dayNumber} results are ready.`,
     );
@@ -1224,7 +1224,7 @@ async function processVoting(
       await supabase.from("notifications").insert({
         user_id: uid,
         game_id: gameId,
-        type: "eliminated",
+        type: "killed",
         title: "You were voted out",
         body: "The town voted to eliminate you.",
       });
@@ -1242,7 +1242,7 @@ async function processVoting(
       supabase,
       gameId,
       allUserIds.filter((u) => u !== uid),
-      "player_killed",
+      "killed",
       "A player was voted out",
       `${victimName} was eliminated by the town vote.`,
     );
@@ -1453,7 +1453,7 @@ async function processNight(
       await supabase.from("notifications").insert({
         user_id: uid,
         game_id: gameId,
-        type: "eliminated",
+        type: "killed",
         title: "You were eliminated",
         body: "You did not survive the night.",
       });
@@ -1471,7 +1471,7 @@ async function processNight(
       supabase,
       gameId,
       allUserIds.filter((u) => u !== uid),
-      "player_killed",
+      "killed",
       "A player was killed",
       `${victimName} did not survive the night.`,
     );
