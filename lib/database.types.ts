@@ -793,7 +793,18 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      complete_phase_and_open_successor: {
+        Args: {
+          p_current_phase_id: string
+          p_day_number: number
+          p_ends_at: string
+          p_game_id: string
+          p_phase_number: number
+          p_phase_type: Database["public"]["Enums"]["game_phase_type"]
+          p_started_at: string
+        }
+        Returns: string | null
+      }
     }
     Enums: {
       chat_room_type: "town" | "mafia" | "dead" | "system"

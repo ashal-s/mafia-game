@@ -778,47 +778,32 @@ async function transitionPhase(
     }
   }
 
-  if (current) {
-    await supabase
-      .from("game_phases")
-      .update({ status: "completed", ended_at: now.toISOString() })
-      .eq("id", current.id);
+  // Complete the claimed phase, insert its successor, and point the game at it
+  // in one PostgreSQL transaction. An insertion/update error rolls completion
+  // back, so the game cannot be stranded with no open phase.
+  const { data: nextPhaseId, error: nextError } = await supabase.rpc(
+    "complete_phase_and_open_successor",
+    {
+      p_current_phase_id: current.id,
+      p_game_id: gameId,
+      p_phase_number: nextNumber,
+      p_phase_type: nextType,
+      p_day_number: nextDay,
+      p_started_at: now.toISOString(),
+      p_ends_at: endsAt.toISOString(),
+    },
+  );
+
+  if (nextError || !nextPhaseId) {
+    return {
+      ended: false,
+      error: nextError?.message ?? "Phase claim was lost before completion.",
+    };
   }
-
-  const { data: next, error: nextError } = await supabase
-    .from("game_phases")
-    .insert({
-      game_id: gameId,
-      phase_number: nextNumber,
-      phase_type: nextType,
-      day_number: nextDay,
-      status: "active",
-      started_at: now.toISOString(),
-      ends_at: endsAt.toISOString(),
-    })
-    .select("id")
-    .single();
-
-  if (nextError || !next) {
-    // Resolution could not finish opening the successor. Release the claim so
-    // a later cron tick or host recovery action can retry instead of leaving
-    // the game permanently stuck in `processing`.
-    await supabase
-      .from("game_phases")
-      .update({ status: "active" })
-      .eq("id", current.id)
-      .eq("status", "processing");
-    return { ended: false, error: nextError?.message ?? "phase" };
-  }
-
-  await supabase
-    .from("games")
-    .update({ current_phase_id: next.id })
-    .eq("id", gameId);
 
   await supabase.from("game_events").insert({
     game_id: gameId,
-    phase_id: next.id,
+    phase_id: nextPhaseId,
     event_type: "phase_changed",
     data: {
       from: current?.phase_type ?? null,
