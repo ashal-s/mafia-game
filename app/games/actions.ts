@@ -831,16 +831,11 @@ async function finishPhaseTransition(
     .select("id")
     .single();
 
-  if (nextError || !next) {
-    // Resolution could not finish opening the successor. Release the claim so
-    // a later cron tick or host recovery action can retry instead of leaving
-    // the game permanently stuck in `processing`.
-    await supabase
-      .from("game_phases")
-      .update({ status: "active" })
-      .eq("id", current.id)
-      .eq("status", "processing");
-    return { ended: false, error: nextError?.message ?? "phase" };
+  if (nextError || !nextPhaseId) {
+    return {
+      ended: false,
+      error: nextError?.message ?? "Phase claim was lost before completion.",
+    };
   }
 
   await supabase
@@ -860,7 +855,7 @@ async function finishPhaseTransition(
 
   await supabase.from("game_events").insert({
     game_id: gameId,
-    phase_id: next.id,
+    phase_id: nextPhaseId,
     event_type: "phase_changed",
     data: {
       from: current?.phase_type ?? null,
