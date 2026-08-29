@@ -12,6 +12,15 @@ import {
   nightActionForRole,
 } from "@/lib/night";
 import { evaluateWin, type WinAlignment } from "@/lib/win";
+import {
+  defaultRoleKeys,
+  investigate,
+  nextPhase,
+  resolveNight,
+  shuffle,
+  tallyVotes,
+  type PhaseType,
+} from "@/lib/game-engine";
 import { consumeRateLimit } from "@/lib/rate-limit";
 
 export type FormState = { error?: string };
@@ -1284,7 +1293,7 @@ async function processVoting(
     phase_id: phaseId,
     event_type: "voting_tally",
     visibility: "host",
-    data: { day_number: dayNumber, tally: Object.fromEntries(tally) },
+    data: { day_number: dayNumber, tally: voteResult.tally },
   });
 }
 

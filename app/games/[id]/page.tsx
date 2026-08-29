@@ -638,7 +638,9 @@ export default async function GamePage({
             rooms: chatRooms,
             namesById,
           }}
-          />
+          reconnectState={reconnectState}
+          latestAlert={latestNotification ?? null}
+        />
       </>
     );
   }
