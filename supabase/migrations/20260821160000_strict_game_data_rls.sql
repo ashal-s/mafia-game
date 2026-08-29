@@ -42,15 +42,21 @@ create policy "Users can read their own profile"
   on public.profiles for select to authenticated
   using (id = (select auth.uid()));
 
--------------------------------------------------------------------------------
--- Games: no unaffiliated lobby discovery through the base table.
+-- Games: invitees must be able to resolve a lobby before they become members.
+-- Codes are unguessable and only lobby rows are exposed to prospective players;
+-- started games remain limited to their members and hosts.
 -------------------------------------------------------------------------------
 
 alter table public.games enable row level security;
 drop policy if exists "Games are visible to members, host, or while joinable" on public.games;
-create policy "Members and hosts can read games"
+drop policy if exists "Members and hosts can read games" on public.games;
+create policy "Games are visible to members, host, or while joinable"
   on public.games for select to authenticated
-  using (private.is_game_member(id) or private.is_game_host(id));
+  using (
+    status = 'lobby'
+    or private.is_game_member(id)
+    or private.is_game_host(id)
+  );
 
 -------------------------------------------------------------------------------
 -- Players: members may see the roster, but only a host may mutate player state.
@@ -177,4 +183,3 @@ drop policy if exists "Members can read game events" on public.game_events;
 create policy "Members and hosts can read game events"
   on public.game_events for select to authenticated
   using (private.is_game_member(game_id) or private.is_game_host(game_id));
-
