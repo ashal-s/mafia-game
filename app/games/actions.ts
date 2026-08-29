@@ -12,6 +12,18 @@ import {
   nightActionForRole,
 } from "@/lib/night";
 import { evaluateWin, type WinAlignment } from "@/lib/win";
+import {
+  assertAuthenticated,
+  assertCanAccessChatRoom,
+  assertCanVote,
+  assertCurrentPhase,
+  assertGameActive,
+  assertHost,
+  assertPlayerAlive,
+  assertPlayerInGame,
+  assertRoleCanAct,
+  permissionMessage,
+} from "@/lib/game-permissions";
 
 export type FormState = { error?: string };
 
@@ -238,6 +250,7 @@ async function requirePlayer() {
   if (!user) {
     redirect("/login");
   }
+  assertAuthenticated(user);
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -257,6 +270,7 @@ export async function createGame(
   formData: FormData,
 ): Promise<FormState> {
   const { supabase, user } = await requirePlayer();
+  assertAuthenticated(user);
 
   const rawName = formData.get("name");
   const name =
@@ -471,6 +485,19 @@ export async function joinGameById(formData: FormData): Promise<void> {
     redirect("/dashboard");
   }
 
+  const { data: game } = await supabase
+    .from("games")
+    .select("status")
+    .eq("id", gameId)
+    .maybeSingle();
+  if (!game || game.status !== "lobby") {
+    redirect(
+      typeof code === "string"
+        ? `/join/${code}?error=game_unavailable`
+        : "/dashboard",
+    );
+  }
+
   const { error } = await supabase
     .from("game_players")
     .insert({ game_id: gameId, user_id: user.id });
@@ -489,6 +516,18 @@ export async function setReady(formData: FormData): Promise<void> {
 
   const ready = formData.get("ready") === "true";
 
+  const { data: player } = await supabase
+    .from("game_players")
+    .select("user_id, status")
+    .eq("game_id", gameId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  try {
+    assertPlayerInGame(player);
+  } catch {
+    redirect(`/games/${gameId}?error=not_authorized`);
+  }
+
   await supabase
     .from("game_players")
     .update({ is_ready: ready })
@@ -499,10 +538,21 @@ export async function setReady(formData: FormData): Promise<void> {
 }
 
 export async function removePlayer(formData: FormData): Promise<void> {
-  const { supabase } = await requirePlayer();
+  const { supabase, user } = await requirePlayer();
   const gameId = formData.get("game_id");
   const playerId = formData.get("player_id");
   if (typeof gameId !== "string" || typeof playerId !== "string") return;
+
+  const { data: game } = await supabase
+    .from("games")
+    .select("host_id")
+    .eq("id", gameId)
+    .maybeSingle();
+  try {
+    assertHost(game, user.id);
+  } catch {
+    redirect(`/games/${gameId}?error=not_authorized`);
+  }
 
   // RLS restricts deletes to the host; never remove the host's own row.
   await supabase
@@ -526,7 +576,9 @@ export async function startGame(formData: FormData): Promise<void> {
     .eq("id", gameId)
     .maybeSingle();
 
-  if (!game || game.host_id !== user.id) {
+  try {
+    assertHost(game, user.id);
+  } catch {
     redirect(`/games/${gameId}`);
   }
   if (game.status !== "lobby") {
@@ -882,7 +934,10 @@ export async function advancePhase(formData: FormData): Promise<void> {
     .maybeSingle();
 
   // Only the host can advance, and only while the game is running.
-  if (!game || game.host_id !== user.id || game.status !== "in_progress") {
+  try {
+    assertHost(game, user.id);
+    assertGameActive(game, { allowPaused: true });
+  } catch {
     redirect(`/games/${gameId}`);
   }
 
@@ -977,13 +1032,11 @@ export async function submitNightAction(
     .select("id, status, settings, is_paused")
     .eq("id", gameId)
     .maybeSingle();
-  if (!game || game.status !== "in_progress") {
-    return { error: "This game is not in progress." };
+  try {
+    assertGameActive(game);
+  } catch (error) {
+    return { error: permissionMessage(error) ?? "You cannot submit this action." };
   }
-  if (game.is_paused) {
-    return { error: "The game is paused by the host." };
-  }
-
   // The active phase must be night.
   const { data: phase } = await supabase
     .from("game_phases")
@@ -993,9 +1046,12 @@ export async function submitNightAction(
     .order("phase_number", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!phase || phase.phase_type !== "night") {
-    return { error: "You can only act during the night." };
+  try {
+    assertCurrentPhase(phase?.phase_type ?? null, "night");
+  } catch (error) {
+    return { error: permissionMessage(error) ?? "You cannot submit this action." };
   }
+  if (!phase) return { error: "This action is only available during night." };
 
   // The actor must be a living member of this game.
   const { data: me } = await supabase
@@ -1004,8 +1060,11 @@ export async function submitNightAction(
     .eq("game_id", gameId)
     .eq("user_id", user.id)
     .maybeSingle();
-  if (!me) return { error: "You are not in this game." };
-  if (me.status !== "alive") return { error: "Dead players cannot act." };
+  try {
+    assertPlayerAlive(me);
+  } catch (error) {
+    return { error: permissionMessage(error) ?? "You cannot submit this action." };
+  }
 
   const { data: roleRow } = await supabase
     .from("game_player_roles")
@@ -1015,9 +1074,12 @@ export async function submitNightAction(
     .maybeSingle();
   const roleKey = one(roleRow?.role)?.key ?? null;
   const descriptor = nightActionForRole(roleKey, roleRow?.alignment ?? null);
-  if (!descriptor) {
-    return { error: "Your role has no night action." };
+  try {
+    assertRoleCanAct(descriptor?.type ?? null);
+  } catch (error) {
+    return { error: permissionMessage(error) ?? "You cannot submit this action." };
   }
+  if (!descriptor) return { error: "Your role cannot perform this action." };
 
   const targetId =
     typeof rawTarget === "string" && rawTarget && rawTarget !== "skip"
@@ -1121,13 +1183,11 @@ export async function submitVote(
     .select("id, status, is_paused")
     .eq("id", gameId)
     .maybeSingle();
-  if (!game || game.status !== "in_progress") {
-    return { error: "This game is not in progress." };
+  try {
+    assertGameActive(game);
+  } catch (error) {
+    return { error: permissionMessage(error) ?? "You cannot submit this vote." };
   }
-  if (game.is_paused) {
-    return { error: "The game is paused by the host." };
-  }
-
   // The active phase must be voting.
   const { data: phase } = await supabase
     .from("game_phases")
@@ -1137,19 +1197,19 @@ export async function submitVote(
     .order("phase_number", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!phase || phase.phase_type !== "voting") {
-    return { error: "You can only vote during the voting phase." };
-  }
-
-  // The voter must be a living member of this game.
+  // The voter must be a living member of this game and voting must be open.
   const { data: me } = await supabase
     .from("game_players")
     .select("id, status")
     .eq("game_id", gameId)
     .eq("user_id", user.id)
     .maybeSingle();
-  if (!me) return { error: "You are not in this game." };
-  if (me.status !== "alive") return { error: "Dead players cannot vote." };
+  try {
+    assertCanVote(me, phase?.phase_type ?? null);
+  } catch (error) {
+    return { error: permissionMessage(error) ?? "You cannot submit this vote." };
+  }
+  if (!phase) return { error: "This action is only available during voting." };
 
   // "abstain" / empty selection means a null target (no one).
   const targetId =
@@ -1579,6 +1639,18 @@ export async function leaveGame(formData: FormData): Promise<void> {
   const gameId = formData.get("game_id");
   if (typeof gameId !== "string") return;
 
+  const { data: membership } = await supabase
+    .from("game_players")
+    .select("user_id, status")
+    .eq("game_id", gameId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  try {
+    assertPlayerInGame(membership);
+  } catch {
+    redirect("/dashboard");
+  }
+
   const { data: game } = await supabase
     .from("games")
     .select("host_id, status")
@@ -1635,11 +1707,36 @@ export async function sendChatMessage(
 
   const { data: me } = await supabase
     .from("game_players")
-    .select("id")
+    .select("id, user_id, status, is_host, is_muted")
     .eq("game_id", gameId)
     .eq("user_id", user.id)
     .maybeSingle();
-  if (!me) return { error: "You are not in this game." };
+  const [{ data: room }, { data: roleRow }] = await Promise.all([
+    supabase
+      .from("chat_rooms")
+      .select("type")
+      .eq("id", roomId)
+      .eq("game_id", gameId)
+      .maybeSingle(),
+    supabase
+      .from("game_player_roles")
+      .select("alignment")
+      .eq("game_id", gameId)
+      .eq("user_id", user.id)
+      .maybeSingle(),
+  ]);
+  try {
+    assertCanAccessChatRoom({
+      player: me,
+      roomType: room?.type ?? "system",
+      alignment: roleRow?.alignment,
+      forPosting: true,
+    });
+    if (!room) throw new Error("room");
+  } catch {
+    return { error: "You can't send messages in this chat." };
+  }
+  if (!me) return { error: "You can't send messages in this chat." };
 
   const { error } = await supabase.from("chat_messages").insert({
     game_id: gameId,
@@ -1676,7 +1773,9 @@ export async function toggleMute(formData: FormData): Promise<void> {
     .select("host_id")
     .eq("id", gameId)
     .maybeSingle();
-  if (!game || game.host_id !== user.id) {
+  try {
+    assertHost(game, user.id);
+  } catch {
     redirect(`/games/${gameId}`);
   }
 
@@ -1712,10 +1811,14 @@ export async function setGamePause(formData: FormData): Promise<void> {
 
   const { data: game } = await supabase
     .from("games")
-    .select("id, host_id, status")
+    .select("id, host_id, status, is_paused")
     .eq("id", gameId)
     .maybeSingle();
-  if (!game || game.host_id !== user.id || game.status !== "in_progress") {
+  try {
+    assertHost(game, user.id);
+    // Resuming intentionally permits the paused state.
+    assertGameActive(game, { allowPaused: !pause });
+  } catch {
     redirect(`/games/${gameId}`);
   }
 
@@ -1766,7 +1869,10 @@ export async function endGameByHost(formData: FormData): Promise<void> {
     .select("id, host_id, status")
     .eq("id", gameId)
     .maybeSingle();
-  if (!game || game.host_id !== user.id || game.status !== "in_progress") {
+  try {
+    assertHost(game, user.id);
+    assertGameActive(game, { allowPaused: true });
+  } catch {
     redirect(`/games/${gameId}`);
   }
 
