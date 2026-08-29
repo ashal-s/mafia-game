@@ -3,7 +3,7 @@
   "crons": [
     {
       "path": "/api/cron/advance-phases",
-      "schedule": "* * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
