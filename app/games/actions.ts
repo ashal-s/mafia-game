@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendPushToUsers } from "@/lib/push/send";
-import type { Json } from "@/lib/database.types";
+import type { Database, Json } from "@/lib/database.types";
 import {
   DEFAULT_HEALER_SELF_HEALS,
   DEFAULT_SNIPER_BULLETS,
@@ -720,11 +720,16 @@ async function transitionPhase(
   gameId: string,
   expectedPhaseId?: string,
 ): Promise<{ ended: boolean; skipped?: boolean; error?: string }> {
+  const staleBefore = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   const { data: current } = await supabase
     .from("game_phases")
-    .select("id, phase_number, phase_type, day_number")
+    .select(
+      "id, phase_number, phase_type, day_number, status, processing_started_at",
+    )
     .eq("game_id", gameId)
-    .eq("status", "active")
+    .or(
+      `status.eq.active,and(status.eq.processing,processing_started_at.lt.${staleBefore})`,
+    )
     .order("phase_number", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -736,17 +741,51 @@ async function transitionPhase(
   // Claim the phase before resolving any actions. The conditional update is an
   // atomic compare-and-set: overlapping cron invocations (or a host clicking
   // advance at the same time) cannot both process the same phase.
-  const { data: claimed, error: claimError } = await supabase
+  let claimQuery = supabase
     .from("game_phases")
-    .update({ status: "processing" })
-    .eq("id", current.id)
-    .eq("status", "active")
+    .update({
+      status: "processing",
+      processing_started_at: new Date().toISOString(),
+    })
+    .eq("id", current.id);
+  claimQuery =
+    current.status === "processing"
+      ? claimQuery
+          .eq("status", "processing")
+          .lt("processing_started_at", staleBefore)
+      : claimQuery.eq("status", "active");
+  const { data: claimed, error: claimError } = await claimQuery
     .select("id")
     .maybeSingle();
 
   if (claimError) return { ended: false, error: claimError.message };
   if (!claimed) return { ended: false, skipped: true };
 
+  try {
+    return await finishPhaseTransition(supabase, gameId, current);
+  } catch (error) {
+    // Supabase helpers normally return errors, but fetches and notifications
+    // can throw. Release the claim on those ordinary failures; a hard process
+    // termination is recovered via the stale timestamp above.
+    await supabase
+      .from("game_phases")
+      .update({ status: "active", processing_started_at: null })
+      .eq("id", current.id)
+      .eq("status", "processing");
+    throw error;
+  }
+}
+
+async function finishPhaseTransition(
+  supabase: DbClient,
+  gameId: string,
+  current: {
+    id: string;
+    phase_number: number;
+    phase_type: Database["public"]["Enums"]["game_phase_type"];
+    day_number: number;
+  },
+): Promise<{ ended: boolean; error?: string }> {
   const now = new Date();
   const currentType = current.phase_type as PhaseType;
   const currentDay = current.day_number;
@@ -778,21 +817,19 @@ async function transitionPhase(
     }
   }
 
-  // Complete the claimed phase, insert its successor, and point the game at it
-  // in one PostgreSQL transaction. An insertion/update error rolls completion
-  // back, so the game cannot be stranded with no open phase.
-  const { data: nextPhaseId, error: nextError } = await supabase.rpc(
-    "complete_phase_and_open_successor",
-    {
-      p_current_phase_id: current.id,
-      p_game_id: gameId,
-      p_phase_number: nextNumber,
-      p_phase_type: nextType,
-      p_day_number: nextDay,
-      p_started_at: now.toISOString(),
-      p_ends_at: endsAt.toISOString(),
-    },
-  );
+  const { data: next, error: nextError } = await supabase
+    .from("game_phases")
+    .insert({
+      game_id: gameId,
+      phase_number: nextNumber,
+      phase_type: nextType,
+      day_number: nextDay,
+      status: "active",
+      started_at: now.toISOString(),
+      ends_at: endsAt.toISOString(),
+    })
+    .select("id")
+    .single();
 
   if (nextError || !nextPhaseId) {
     return {
@@ -800,6 +837,21 @@ async function transitionPhase(
       error: nextError?.message ?? "Phase claim was lost before completion.",
     };
   }
+
+  await supabase
+    .from("game_phases")
+    .update({
+      status: "completed",
+      ended_at: now.toISOString(),
+      processing_started_at: null,
+    })
+    .eq("id", current.id)
+    .eq("status", "processing");
+
+  await supabase
+    .from("games")
+    .update({ current_phase_id: next.id })
+    .eq("id", gameId);
 
   await supabase.from("game_events").insert({
     game_id: gameId,
@@ -862,11 +914,14 @@ export async function autoAdvanceExpiredPhases(): Promise<{
 }> {
   const admin = createAdminClient();
   const nowIso = new Date().toISOString();
+  const staleBefore = new Date(Date.now() - 5 * 60 * 1000).toISOString();
 
   const { data: rows, error } = await admin
     .from("game_phases")
     .select("id, game_id, ends_at, game:games!inner(status, is_paused)")
-    .eq("status", "active")
+    .or(
+      `status.eq.active,and(status.eq.processing,processing_started_at.lt.${staleBefore})`,
+    )
     .not("ends_at", "is", null)
     .lte("ends_at", nowIso)
     .eq("game.status", "in_progress")
